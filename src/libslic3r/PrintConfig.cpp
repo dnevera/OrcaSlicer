@@ -4679,9 +4679,8 @@ void PrintConfigDef::init_fff_params()
                        "Higher values create deeper interlocking but may affect surface quality.");
     def->sidetext = L("%");
     def->min      = 1;
-    def->max      = 50;
-    def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(15));
+    def->mode     = comExpert;
+    def->set_default_value(new ConfigOptionFloat(50));
 
     def           = this->add("flow_weaving_xy_amplitude", coFloat);
     def->label    = L("XY width amplitude");
@@ -4691,9 +4690,8 @@ void PrintConfigDef::init_fff_params()
                        "Controls the in-plane interlocking depth. Set to 0 to disable XY modulation.");
     def->sidetext = L("%");
     def->min      = 1;
-    def->max      = 80;
-    def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(15));
+    def->mode     = comExpert;
+    def->set_default_value(new ConfigOptionFloat(80));
 
     def           = this->add("flow_weaving_period", coFloat);
     def->label    = L("Wave period");
@@ -4705,7 +4703,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0.2;
     def->max      = 10.0;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.4));
+    def->set_default_value(new ConfigOptionFloat(1.0));
 
     def             = this->add("layer_change_gcode", coString);
     def->label      = L("Layer change G-code");
