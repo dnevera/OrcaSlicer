@@ -7667,11 +7667,17 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                 const double lh = m_layer->height;
                                 const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
-                                // Check if xy_pt is inside the fill region of layer l
-                                auto point_in_fill_region = [&xy_pt](const Layer* l) -> bool {
+                                // Check if xy_pt is inside the SPARSE INFILL region
+                                // of layer l.  We only count stInternal surfaces —
+                                // top/bottom/solid surfaces are the boundary where
+                                // Z-modulation must fade out.  Using
+                                // fill_no_overlap_expolygons (which includes ALL fill
+                                // types) caused the boundary walk to pass through
+                                // solid layers and never clamp at low amplitudes.
+                                auto point_in_sparse_fill = [&xy_pt](const Layer* l) -> bool {
                                     for (const LayerRegion* r : l->regions())
-                                        for (const ExPolygon& ep : r->fill_no_overlap_expolygons)
-                                            if (ep.contains(xy_pt))
+                                        for (const Surface& s : r->fill_surfaces.surfaces)
+                                            if (s.surface_type == stInternal && s.expolygon.contains(xy_pt))
                                                 return true;
                                     return false;
                                 };
@@ -7684,7 +7690,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                     bool found = false;
                                     const Layer* check = m_layer->upper_layer;
                                     while (check) {
-                                        if (!point_in_fill_region(check)) {
+                                        if (!point_in_sparse_fill(check)) {
                                             boundary_z = check->bottom_z();
                                             found = true;
                                             break;
@@ -7723,7 +7729,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                     bool found = false;
                                     const Layer* check = m_layer->lower_layer;
                                     while (check) {
-                                        if (!point_in_fill_region(check)) {
+                                        if (!point_in_sparse_fill(check)) {
                                             boundary_z = check->print_z;
                                             found = true;
                                             break;
