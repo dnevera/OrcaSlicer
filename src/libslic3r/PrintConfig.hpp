@@ -56,6 +56,12 @@ enum class FuzzySkinType {
     Disabled_fuzzy,
 };
 
+enum class MicroMoldingType {
+    None,
+    Regular,
+    Random,
+};
+
 enum class FuzzySkinMode {
     Displacement,
     Extrusion,
@@ -93,6 +99,7 @@ enum InfillPattern : int {
     ipHoneycomb, ip3DHoneycomb, ipLateralHoneycomb, ipLateralLattice,
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
     ipConcentric, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
+    ipFlowWeaving,
     ipSupportBase, ipConcentricInternal,
     ipCount,
 };
@@ -532,6 +539,7 @@ extern std::vector<std::string> save_extruder_nozzle_stats_to_string(const std::
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PrinterTechnology)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(GCodeFlavor)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(MicroMoldingType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
@@ -1394,6 +1402,21 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, zaa_dont_alternate_fill_direction))
     ((ConfigOptionFloat, zaa_min_z))
     ((ConfigOptionFloat, zaa_minimize_perimeter_height))
+
+    // In-situ Micro-Injection Molding
+    ((ConfigOptionEnum<MicroMoldingType>, micro_molding))
+    ((ConfigOptionFloat,                  micro_molding_cavity_diameter))
+    ((ConfigOptionInt,                    micro_molding_layers_span))
+    ((ConfigOptionFloat,                  micro_molding_flow_multiplier))
+    ((ConfigOptionInt,                    micro_molding_temp_offset))
+    ((ConfigOptionFloat,                  micro_molding_lock_ratio))
+    ((ConfigOptionInt,                    micro_molding_neck_layers))
+    ((ConfigOptionInt,                    micro_molding_head_layers))
+
+    // Flow Weaving: virtual layer interlocking via Z + width modulation
+    ((ConfigOptionFloat,                  flow_weaving_z_amplitude))
+    ((ConfigOptionFloat,                  flow_weaving_xy_amplitude))
+    ((ConfigOptionFloat,                  flow_weaving_period))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

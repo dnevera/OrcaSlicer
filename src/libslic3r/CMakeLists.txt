@@ -137,6 +137,8 @@ set(lisbslic3r_sources
     Feature/Interlocking/InterlockingGenerator.hpp
     Feature/Interlocking/VoxelUtils.cpp
     Feature/Interlocking/VoxelUtils.hpp
+    Feature/MicroMolding/MicroMolding.cpp
+    Feature/MicroMolding/MicroMolding.hpp
     FileParserError.hpp
     Fill/Fill3DHoneycomb.cpp
     Fill/Fill3DHoneycomb.hpp
@@ -151,6 +153,8 @@ set(lisbslic3r_sources
     Fill/Fill.cpp
     Fill/FillCrossHatch.cpp
     Fill/FillCrossHatch.hpp
+    Fill/FillFlowWeaving.cpp
+    Fill/FillFlowWeaving.hpp
     Fill/FillGyroid.cpp
     Fill/FillGyroid.hpp
     Fill/FillHoneycomb.cpp

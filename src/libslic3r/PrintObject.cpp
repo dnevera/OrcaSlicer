@@ -21,6 +21,7 @@
 #include "Utils.hpp"
 #include "Fill/FillAdaptive.hpp"
 #include "Fill/FillLightning.hpp"
+#include "Feature/MicroMolding/MicroMolding.hpp"
 #include "Format/STL.hpp"
 #include "format.hpp"
 #include "AABBTreeLines.hpp"
@@ -677,6 +678,11 @@ void PrintObject::prepare_infill()
 
     // combine fill surfaces to honor the "infill every N layers" option
     this->combine_infill();
+    m_print->throw_if_canceled();
+
+    // In-situ Micro-Injection Molding: subtract cavities and enforce solid infill
+    MicroMolding::subtract_cavities(this);
+    MicroMolding::enforce_solid_around_cavities(this);
     m_print->throw_if_canceled();
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING

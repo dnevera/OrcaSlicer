@@ -1,0 +1,162 @@
+// ── Flow Weaving Infill Pattern ────────────────────────────────────────────
+//
+// Creates inter-layer mechanical interlocking by sinusoidally modulating the
+// extrusion width (XY plane) along each infill line.  The complementary
+// Z-height modulation is handled at G-code generation time (GCode.cpp).
+//
+// How it works:
+//   1. Base rectilinear lines are generated at 100% density.
+//   2. Each line is subdivided into short sub-segments (~period/8).
+//   3. Each sub-segment gets a width = base_width × factor, where
+//      factor = 1 + (wratio - 1) × (sin(θ) + 1) / 2.
+//   4. Phase alternates between layers (even=0, odd=π) so that wide
+//      segments on layer N align with narrow ones on N+1 and vice versa.
+//
+// Parameters (from PrintConfig):
+//   flow_weaving_xy_amplitude  – width modulation as % (e.g. 15 → ×1.15)
+//   flow_weaving_period        – wave length in mm (default = nozzle diameter)
+//
+// The Z-modulation counterpart uses flow_weaving_z_amplitude (see GCode.cpp).
+// ───────────────────────────────────────────────────────────────────────────
+
+#include "FillFlowWeaving.hpp"
+#include "FillRectilinear.hpp"
+#include "../PrintConfig.hpp"
+#include "../ExtrusionEntity.hpp"
+
+#include <cmath>
+
+namespace Slic3r {
+
+void FillFlowWeaving::_fill_surface_single(
+    const FillParams              &params,
+    unsigned int                   thickness_layers,
+    const std::pair<float, Point> &direction,
+    ExPolygon                      expolygon,
+    Polylines                     &polylines_out)
+{
+    // Not used directly — fill_surface_extrusion() overrides the pipeline.
+    // Required by base class virtual interface; left empty intentionally.
+}
+
+void FillFlowWeaving::fill_surface_extrusion(
+    const Surface *surface, const FillParams &params,
+    ExtrusionEntitiesPtr &out)
+{
+    // ── Step 1: Generate base rectilinear toolpaths ──────────────────────
+    // We reuse the standard rectilinear infill engine to get evenly spaced
+    // parallel lines, then apply width modulation on top.
+    FillRectilinear recti;
+    recti.layer_id              = this->layer_id;
+    recti.z                     = this->z;
+    recti.spacing               = this->spacing;
+    recti.overlap               = this->overlap;
+    recti.angle                 = this->angle;
+    recti.link_max_length       = this->link_max_length;
+    recti.loop_clipping         = this->loop_clipping;
+    recti.bounding_box          = this->bounding_box;
+    recti.print_config          = this->print_config;
+    recti.print_object_config   = this->print_object_config;
+    recti.no_overlap_expolygons = this->no_overlap_expolygons;
+
+    // Force 100% density — Flow Weaving always fills fully
+    FillParams fw_params = params;
+    fw_params.density = 1.0f;
+    fw_params.dont_adjust = false;
+
+    Polylines polylines;
+    try {
+        polylines = recti.fill_surface(surface, fw_params);
+    } catch (InfillFailedException&) {}
+    if (polylines.empty())
+        return;
+
+    // ── Step 2: Read modulation parameters ───────────────────────────────
+    // flow_weaving_period       — wave period in mm (default: nozzle diam)
+    // flow_weaving_xy_amplitude — percentage, converted to width ratio:
+    //   e.g. 15% → wratio = 1.15 → width oscillates from ×1.0 to ×1.15
+    double fw_period = 0.4;
+    double fw_wratio = 1.15;   // 15% default → ×1.15
+    if (params.config) {
+        fw_period = params.config->flow_weaving_period.value;
+        fw_wratio = 1.0 + params.config->flow_weaving_xy_amplitude.value / 100.0;
+    }
+
+    // ── Step 3: Compute base flow dimensions ─────────────────────────────
+    Flow base_flow = params.flow;
+    if (!params.using_internal_flow)
+        base_flow = params.flow.with_spacing(float(this->spacing));
+
+    double base_mm3 = base_flow.mm3_per_mm();  // volumetric flow per mm
+    float  base_w   = base_flow.width();        // nominal line width
+    float  base_h   = base_flow.height();       // layer height
+
+    // ── Step 4: Phase alternation ────────────────────────────────────────
+    // Even layers: phase = 0   → sin starts at 0, peaks first
+    // Odd  layers: phase = π   → sin starts at 0, troughs first
+    // This ensures adjacent layers interlock (peak ↔ trough alignment).
+    double phase = M_PI * (this->layer_id % 2);
+
+    // ── Step 5: Sub-segmentation ─────────────────────────────────────────
+    // Each infill line is split into sub-segments of ~period/8 length.
+    // This provides smooth sinusoidal width transitions (~8 samples/wave).
+    double sub_target = fw_period / 8.0;
+
+    // ── Step 6: Build output ExtrusionEntityCollection ────────────────────
+    ExtrusionEntityCollection *eec = new ExtrusionEntityCollection();
+    eec->no_sort = false;
+    out.push_back(eec);
+
+    // ── Step 7: Width-modulated sub-segment generation ────────────────────
+    for (Polyline &pl : polylines) {
+        if (pl.points.size() < 2)
+            continue;
+
+        ExtrusionMultiPath *mp = new ExtrusionMultiPath();
+        double accumulated = 0.0;   // distance accumulated along the polyline
+
+        for (size_t i = 1; i < pl.points.size(); ++i) {
+            Vec2d a = pl.points[i - 1].cast<double>();
+            Vec2d b = pl.points[i].cast<double>();
+            double seg_len_scaled = (b - a).norm();
+            double seg_len = unscale<double>(seg_len_scaled);
+
+            if (seg_len < EPSILON)
+                continue;
+
+            int n_subs = std::max(1, (int)std::ceil(seg_len / sub_target));
+            double sub_len = seg_len / n_subs;
+            Vec2d dir = (b - a) / seg_len_scaled;
+
+            for (int s = 0; s < n_subs; ++s) {
+                // Evaluate sin at midpoint of sub-segment for stable sampling
+                double pos = accumulated + sub_len * (s + 0.5);
+                double t = std::sin(2.0 * M_PI * pos / fw_period + phase);
+
+                // Width modulation factor:
+                //   t ∈ [-1,+1] → factor ∈ [1.0, wratio]
+                //   at t=-1: factor = 1.0      (nominal width)
+                //   at t=+1: factor = wratio   (e.g. 1.15 for 15%)
+                double factor = 1.0 + (fw_wratio - 1.0) * (t + 1.0) / 2.0;
+                double sub_mm3 = base_mm3 * factor;
+                float  sub_w   = base_w * (float)factor;
+
+                // Sub-segment endpoints (scaled coordinates)
+                Point sub_a = (a + dir * scale_(sub_len * s)).cast<coord_t>();
+                Point sub_b = (a + dir * scale_(sub_len * (s + 1))).cast<coord_t>();
+
+                ExtrusionPath path(params.extrusion_role, sub_mm3, sub_w, base_h);
+                path.polyline.points = { Point3(sub_a, 0), Point3(sub_b, 0) };
+                mp->paths.push_back(std::move(path));
+            }
+            accumulated += seg_len;
+        }
+
+        if (!mp->empty())
+            eec->entities.push_back(mp);
+        else
+            delete mp;
+    }
+}
+
+} // namespace Slic3r

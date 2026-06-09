@@ -142,6 +142,9 @@ public:
     //Extrusions estimated to be seriously malformed, estimated during "Estimating curled extrusions" step. These lines should be avoided during fast travels.
     CurledLines         curled_lines;
 
+    // In-situ Micro-Injection Molding: centres of cavities to inject on this layer
+    std::vector<Point>  micro_molding_injection_points;
+
     // BBS
     mutable ExPolygons          sharp_tails;
     mutable ExPolygons          cantilevers;

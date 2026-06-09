@@ -208,6 +208,13 @@ static t_config_enum_values s_keys_map_FuzzySkinType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(FuzzySkinType)
 
+static t_config_enum_values s_keys_map_MicroMoldingType {
+    { "none",    int(MicroMoldingType::None) },
+    { "regular", int(MicroMoldingType::Regular) },
+    { "random",  int(MicroMoldingType::Random) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(MicroMoldingType)
+
 static t_config_enum_values s_keys_map_NoiseType {
     { "classic",        int(NoiseType::Classic) },
     { "perlin",         int(NoiseType::Perlin) },
@@ -259,7 +266,8 @@ static t_config_enum_values s_keys_map_InfillPattern {
     { "concentric", ipConcentric },
     { "hilbertcurve", ipHilbertCurve },
     { "archimedeanchords", ipArchimedeanChords },
-    { "octagramspiral", ipOctagramSpiral }
+    { "octagramspiral", ipOctagramSpiral },
+    { "flowweaving", ipFlowWeaving }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InfillPattern)
 
@@ -3194,6 +3202,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("hilbertcurve");
     def->enum_values.push_back("archimedeanchords");
     def->enum_values.push_back("octagramspiral");
+    def->enum_values.push_back("flowweaving");
     def->enum_labels.push_back(L("Rectilinear"));
     def->enum_labels.push_back(L("Aligned Rectilinear"));
     def->enum_labels.push_back(L("Zig Zag"));
@@ -3220,6 +3229,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Hilbert Curve"));
     def->enum_labels.push_back(L("Archimedean Chords"));
     def->enum_labels.push_back(L("Octagram Spiral"));
+    def->enum_labels.push_back(L("Flow Weaving"));
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
     def           = this->add("lateral_lattice_angle_1", coFloat);
@@ -4578,6 +4588,139 @@ void PrintConfigDef::init_fff_params()
     def->max      = 100;
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionFloat(0.05));
+
+    // In-situ Micro-Injection Molding
+    def = this->add("micro_molding", coEnum);
+    def->label    = L("Micro-injection molding");
+    def->category = L("Strength");
+    def->tooltip  = L("Create vertical cavities inside the model and inject molten plastic to form Z-reinforcing pins. "
+                      "This significantly improves inter-layer bonding strength.");
+    def->enum_keys_map = &ConfigOptionEnum<MicroMoldingType>::get_enum_values();
+    def->enum_values.push_back("none");
+    def->enum_values.push_back("regular");
+    def->enum_values.push_back("random");
+    def->enum_labels.push_back(L("None"));
+    def->enum_labels.push_back(L("Regular grid"));
+    def->enum_labels.push_back(L("Random jitter"));
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<MicroMoldingType>(MicroMoldingType::None));
+
+    def = this->add("micro_molding_cavity_diameter", coFloat);
+    def->label    = L("Cavity diameter");
+    def->category = L("Strength");
+    def->tooltip  = L("Diameter of the vertical cavities used for micro-injection molding. "
+                      "Should be at least 2x the nozzle diameter for reliable filling.");
+    def->sidetext = L("mm");
+    def->min      = 0.3;
+    def->max      = 5.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.0));
+
+    def = this->add("micro_molding_layers_span", coInt);
+    def->label    = L("Layers per span");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of layers each vertical cavity spans before being sealed and injected. "
+                      "Higher values create longer Z-pins but require more injection pressure.");
+    def->min      = 2;
+    def->max      = 100;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(10));
+
+    def = this->add("micro_molding_flow_multiplier", coFloat);
+    def->label    = L("Injection flow multiplier");
+    def->category = L("Strength");
+    def->tooltip  = L("Extra flow multiplier for the injection step. "
+                      "Values > 1.0 overfill the cavity slightly for better bonding.");
+    def->min      = 0.5;
+    def->max      = 3.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.05));
+
+    def = this->add("micro_molding_temp_offset", coInt);
+    def->label    = L("Injection temperature offset");
+    def->category = L("Strength");
+    def->tooltip  = L("Temporary nozzle temperature increase during injection to improve flow into the cavity. "
+                      "Set to 0 to disable temperature change.");
+    def->sidetext = L("°C");
+    def->min      = 0;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(20));
+
+    def = this->add("micro_molding_lock_ratio", coFloat);
+    def->label    = L("Lock head/neck ratio");
+    def->category = L("Strength");
+    def->tooltip  = L("Ratio of the wide head diameter to the narrow neck diameter in the interlocking cavity profile. "
+                      "Higher values create stronger mechanical locks but require more space. "
+                      "Example: 1.8 means head is 1.8× wider than neck.");
+    def->min      = 1.2;
+    def->max      = 3.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.8));
+
+    def = this->add("micro_molding_neck_layers", coInt);
+    def->label    = L("Neck layers");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of layers for each narrow neck section in the interlocking cavity profile. "
+                      "The neck + head layers form one lock cycle.");
+    def->min      = 1;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
+
+    def = this->add("micro_molding_head_layers", coInt);
+    def->label    = L("Head layers");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of layers for each wide head section in the interlocking cavity profile. "
+                      "The neck + head layers form one lock cycle.");
+    def->min      = 1;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(1));
+
+    // ── Flow Weaving parameters ──────────────────────────────────────────
+    // Sinusoidal modulation of extrusion width (XY) and nozzle height (Z)
+    // to create inter-layer mechanical interlocking.
+    //
+    //   XY modulation: handled by FillFlowWeaving.cpp (Fill level)
+    //   Z  modulation: handled by GCode.cpp (G-code generation)
+    //
+    // Both axes use the same wave period and phase alternation (even/odd).
+    // ─────────────────────────────────────────────────────────────────────
+    def = this->add("flow_weaving_z_amplitude", coFloat);
+    def->label    = L("Z amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Amplitude of Z-height modulation as percentage of layer height. "
+                      "Higher values create deeper interlocking but may affect surface quality.");
+    def->sidetext = L("%");
+    def->min      = 1;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(15));
+
+    def = this->add("flow_weaving_xy_amplitude", coFloat);
+    def->label    = L("XY width amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Amplitude of extrusion width modulation as percentage of nominal width. "
+                      "15% means width varies from ~0.93× to ~1.15× nominal. "
+                      "Controls the in-plane interlocking depth. Set to 0 to disable XY modulation.");
+    def->sidetext = L("%");
+    def->min      = 1;
+    def->max      = 80;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(15));
+
+    def = this->add("flow_weaving_period", coFloat);
+    def->label    = L("Wave period");
+    def->category = L("Strength");
+    def->tooltip  = L("Length of one complete wave cycle along the extrusion path. "
+                      "Shorter periods create denser interlocking. "
+                      "A good starting point is the nozzle diameter.");
+    def->sidetext = L("mm");
+    def->min      = 0.2;
+    def->max      = 10.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.4));
 
     def = this->add("layer_change_gcode", coString);
     def->label = L("Layer change G-code");

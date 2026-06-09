@@ -16,6 +16,7 @@
 #include "GCode/WipeTower.hpp"
 #include "ShortestPath.hpp"
 #include "Print.hpp"
+#include "Feature/MicroMolding/MicroMolding.hpp"
 #include "Utils.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r.h"
@@ -5866,6 +5867,50 @@ LayerResult GCode::process_layer(
         gcode += insert_timelapse_gcode();
     }
 
+    // In-situ Micro-Injection Molding: inject plastic into cavities at top of each span
+    if (object_layer && !object_layer->micro_molding_injection_points.empty()) {
+        double filament_dia = m_config.filament_diameter.get_at(0);
+        double nozzle_dia   = m_config.nozzle_diameter.get_at(0);
+        int    nozzle_temp  = m_config.nozzle_temperature.get_at(0);
+        // Injection points are stored in object-local coordinates.
+        // Compute the absolute plate offset from the first instance shift.
+        Vec2d copy_offset = unscale(layer.object()->instances().front().shift);
+        gcode += MicroMolding::generate_injection_gcode(
+            layer.object(), object_layer->id(),
+            print_z, object_layer->height,
+            filament_dia, nozzle_dia, nozzle_temp,
+            m_config.use_relative_e_distances.value,
+            copy_offset);
+
+        // Post-injection nozzle cleaning: travel to wipe tower and purge
+        {
+            int    plate_idx = print.get_plate_index();
+            double wt_x = print.config().wipe_tower_x.get_at(plate_idx);
+            double wt_y = print.config().wipe_tower_y.get_at(plate_idx);
+
+            std::ostringstream purge;
+            purge << std::fixed << std::setprecision(3);
+            purge << "; Micro-molding: nozzle cleaning at wipe tower\n";
+            // Retract before travel
+            purge << "G1 E-0.800 F1800 ; Retract for travel to tower\n";
+            // Lift Z to clear the model
+            purge << "G1 Z" << (print_z + 2.0) << " F1200 ; Lift Z for travel\n";
+            // Travel to wipe tower
+            purge << "G1 X" << wt_x << " Y" << wt_y << " F9000 ; Travel to wipe tower\n";
+            // Lower to print Z
+            purge << "G1 Z" << print_z << " F1200 ; Lower to print Z\n";
+            // De-retract + purge a small amount to clean nozzle
+            purge << "G1 E1.500 F300 ; De-retract + purge nozzle\n";
+            // Small wipe move on the tower
+            purge << "G1 X" << (wt_x + 10.0) << " Y" << wt_y << " F1500 ; Wipe on tower\n";
+            purge << "G1 X" << (wt_x + 10.0) << " Y" << (wt_y + 2.0) << " F1500 ; Wipe on tower\n";
+            // Retract after purge
+            purge << "G1 E-0.800 F1800 ; Retract after purge\n";
+            purge << "; End nozzle cleaning\n";
+            gcode += purge.str();
+        }
+    }
+
     result.gcode = std::move(gcode);
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
     return result;
@@ -7544,11 +7589,46 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                                          GCodeWriter::full_gcode_comment ? tempDescription : "");
 
                     } else if (sloped == nullptr) {
-                        // Normal extrusion
-                        gcode += m_writer.extrude_to_xy(
-                            this->point_to_gcode(line.b.to_point()),
-                            dE,
-                            GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                        // ── Flow Weaving Z-modulation ──────────────────────────
+                        // Complements the XY width modulation done at Fill level
+                        // (FillFlowWeaving.cpp).  Here we sinusoidally vary the
+                        // nozzle Z-height along the extrusion path so adjacent
+                        // layers interlock vertically.
+                        //
+                        // Phase alternation (even=0, odd=π) ensures that peaks
+                        // on layer N align with troughs on layer N+1, creating
+                        // a mechanical lock between layers.
+                        //
+                        // Parameters (from PrintConfig):
+                        //   flow_weaving_z_amplitude  – % of layer_height
+                        //   flow_weaving_period       – wave length in mm
+                        // ───────────────────────────────────────────────────────
+                        const bool fw_z_active =
+                            m_config.sparse_infill_pattern.value == ipFlowWeaving &&
+                            m_config.flow_weaving_z_amplitude.value > 0 &&
+                            m_layer != nullptr &&
+                            (path.role() == erSolidInfill || path.role() == erInternalInfill);
+
+                        if (fw_z_active) {
+                            const double fw_amp    = m_config.flow_weaving_z_amplitude.value / 100.0;  // e.g. 15 → 0.15
+                            const double fw_period = m_config.flow_weaving_period.value;               // mm
+                            const double fw_phase  = M_PI * (m_layer->id() % 2);                      // 0 or π
+
+                            double pos = path_length;                                    // distance along path
+                            double t = std::sin(2.0 * M_PI * pos / fw_period + fw_phase);
+                            double z = m_nominal_z + fw_amp * path.height * t;           // modulated Z
+                            if (z < 0.05) z = 0.05;                                     // safety floor
+
+                            Vec2d dest2d = this->point_to_gcode(line.b.to_point());
+                            gcode += m_writer.extrude_to_xyz(
+                                Vec3d(dest2d.x(), dest2d.y(), z), dE,
+                                GCodeWriter::full_gcode_comment ? tempDescription : "");
+                        } else {
+                            gcode += m_writer.extrude_to_xy(
+                                this->point_to_gcode(line.b.to_point()),
+                                dE,
+                                GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                        }
                     } else {
                         // Sloped extrusion
                         const auto [z_ratio, e_ratio] = sloped->interpolate(path_length / total_length);

@@ -541,6 +541,29 @@ void ConfigManipulation::update_print_fff_config(DynamicPrintConfig* config, con
         apply(config, &new_conf);
         is_msg_dlg_already_exist = false;
     }
+
+    // Micro-Injection Molding requires prime tower for nozzle cleaning after injection
+    if (!is_plate_config && config->has("micro_molding") &&
+        config->opt_enum<MicroMoldingType>("micro_molding") != MicroMoldingType::None &&
+        config->has("enable_prime_tower") && !config->opt_bool("enable_prime_tower"))
+    {
+        wxString msg_text = _(L("Micro-Injection Molding requires the Prime Tower to be enabled.\n"
+                                "After each injection cycle, the nozzle must be cleaned at the wipe tower "
+                                "to prevent residual plastic from affecting print quality.\n\n"
+                                "Enable Prime Tower automatically?\n"
+                                "Yes - Enable Prime Tower\n"
+                                "No  - Disable Micro-Injection Molding"));
+        MessageDialog dialog(m_msg_dlg_parent, msg_text, "", wxICON_WARNING | wxYES | wxNO);
+        DynamicPrintConfig new_conf = *config;
+        is_msg_dlg_already_exist = true;
+        auto answer = dialog.ShowModal();
+        if (answer == wxID_YES)
+            new_conf.set_key_value("enable_prime_tower", new ConfigOptionBool(true));
+        else
+            new_conf.set_key_value("micro_molding", new ConfigOptionEnum<MicroMoldingType>(MicroMoldingType::None));
+        apply(config, &new_conf);
+        is_msg_dlg_already_exist = false;
+    }
 }
 
 void ConfigManipulation::apply_null_fff_config(DynamicPrintConfig *config, std::vector<std::string> const &keys, std::map<ObjectBase *, ModelConfig *> const &configs)
@@ -821,6 +844,25 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool has_zaa = config->opt_bool("zaa_enabled");
     for (auto el : {"zaa_minimize_perimeter_height", "zaa_min_z", "zaa_dont_alternate_fill_direction", "ironing_expansion"})
         toggle_line(el, has_zaa);
+
+    bool has_micro_molding = config->opt_enum<MicroMoldingType>("micro_molding") != MicroMoldingType::None;
+    for (auto el : {"micro_molding_cavity_diameter", "micro_molding_layers_span",
+                    "micro_molding_flow_multiplier", "micro_molding_temp_offset",
+                    "micro_molding_lock_ratio", "micro_molding_neck_layers",
+                    "micro_molding_head_layers"})
+        toggle_line(el, has_micro_molding);
+
+    // Flow Weaving: force 100% density and toggle parameter visibility
+    bool is_flow_weaving = pattern == ipFlowWeaving;
+    if (is_flow_weaving) {
+        DynamicPrintConfig new_conf = *config;
+        new_conf.set_key_value("sparse_infill_density", new ConfigOptionPercent(100));
+        apply(config, &new_conf);
+    }
+    toggle_field("sparse_infill_density", !is_flow_weaving);
+    for (auto el : {"flow_weaving_z_amplitude", "flow_weaving_xy_amplitude",
+                    "flow_weaving_period"})
+        toggle_line(el, is_flow_weaving);
 
     bool have_sequential_printing = (config->opt_enum<PrintSequence>("print_sequence") == PrintSequence::ByObject);
     // for (auto el : { "extruder_clearance_radius", "extruder_clearance_height_to_rod", "extruder_clearance_height_to_lid" })
