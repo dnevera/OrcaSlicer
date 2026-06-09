@@ -7613,28 +7613,48 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                             // ── Model-aware Z clamping ──────────────────────────
                             // On sloped surfaces (e.g. Benchy hull), the ceiling
-                            // varies per XY position. Walk up/down through layers
-                            // and check if this XY point is still inside the model
-                            // (lslices) at the modulated Z. Clamp to the last
-                            // layer whose cross-section contains the point.
+                            // varies per XY position.  Walk up/down through
+                            // layers and verify the point is inside a SPARSE
+                            // INFILL region (stInternal/stInternalVoid) at each
+                            // layer via fill_surfaces, NOT just the model slice
+                            // (lslices).
+                            //
+                            // Why fill_surfaces instead of lslices?  lslices is
+                            // the full model cross-section including perimeters
+                            // and solid top/bottom surfaces.  A point can be
+                            // inside the model but in a solid zone — modulating
+                            // into it would collide with perimeters/top surfaces.
+                            //
+                            // Uses ExPolygon::contains() (not contour.contains())
+                            // to respect holes (e.g. Benchy portholes).
                             {
                                 const Point xy_pt = line.b.to_point();
-                                if (z > m_nominal_z) {
-                                    // Going UP: walk upper layers until z < layer->print_z
-                                    const Layer *check = m_layer->upper_layer;
-                                    while (check && z > check->print_z - check->height * 0.5) {
-                                        // Check if XY point is inside model at this layer
-                                        bool inside = false;
-                                        for (size_t i = 0; i < check->lslices.size(); ++i) {
-                                            if (check->lslices_bboxes[i].contains(xy_pt) &&
-                                                check->lslices[i].contour.contains(xy_pt)) {
-                                                inside = true;
-                                                break;
-                                            }
+
+                                // Helper: check if point is inside SPARSE INFILL
+                                // area of a layer.  Returns true only if the point
+                                // is within a fill_surface typed as stInternal or
+                                // stInternalVoid (sparse infill).  Returns false
+                                // for perimeters, top/bottom surfaces, solid infill,
+                                // and holes — these are boundaries the Z-modulation
+                                // must not penetrate.
+                                auto point_in_sparse_infill = [&xy_pt](const Layer *l) -> bool {
+                                    for (const LayerRegion *lr : l->regions()) {
+                                        for (const Surface &s : lr->fill_surfaces.surfaces) {
+                                            if ((s.surface_type == stInternal ||
+                                                 s.surface_type == stInternalVoid) &&
+                                                s.expolygon.contains(xy_pt))
+                                                return true;
                                         }
-                                        if (!inside) {
-                                            // Point is outside model at this layer → clamp
-                                            z = check->print_z - check->height;
+                                    }
+                                    return false;
+                                };
+
+                                if (z > m_nominal_z) {
+                                    // Going UP: walk upper layers
+                                    const Layer *check = m_layer->upper_layer;
+                                    while (check && z >= check->bottom_z()) {
+                                        if (!point_in_sparse_infill(check)) {
+                                            z = check->bottom_z();
                                             break;
                                         }
                                         check = check->upper_layer;
@@ -7642,16 +7662,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                 } else if (z < m_nominal_z) {
                                     // Going DOWN: walk lower layers
                                     const Layer *check = m_layer->lower_layer;
-                                    while (check && z < check->print_z + check->height * 0.5) {
-                                        bool inside = false;
-                                        for (size_t i = 0; i < check->lslices.size(); ++i) {
-                                            if (check->lslices_bboxes[i].contains(xy_pt) &&
-                                                check->lslices[i].contour.contains(xy_pt)) {
-                                                inside = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!inside) {
+                                    while (check && z <= check->print_z) {
+                                        if (!point_in_sparse_infill(check)) {
                                             z = check->print_z;
                                             break;
                                         }
