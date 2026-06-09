@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Micro-molding: Regular grid — vertical pins on a uniform grid -->
+  <rect x="1.5" y="1.5" width="21" height="21" rx="2" style="fill:none;stroke:#949494;stroke-linecap:round;stroke-linejoin:round"/>
+  <!-- Grid dots (teal) — representing injection pin cross-sections -->
+  <circle cx="7" cy="7" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="12" cy="7" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="17" cy="7" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="7" cy="12" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="12" cy="12" r="2" style="fill:#009688;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="17" cy="12" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="7" cy="17" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="12" cy="17" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <circle cx="17" cy="17" r="2" style="fill:none;stroke:#009688;stroke-width:1.2"/>
+  <!-- Injection arrows (gray) — showing downward fill -->
+  <line x1="12" y1="3.5" x2="12" y2="9.5" style="fill:none;stroke:#949494;stroke-width:0.8;stroke-linecap:round;opacity:0.7"/>
+  <polyline points="10.5,8 12,9.5 13.5,8" style="fill:none;stroke:#949494;stroke-width:0.8;stroke-linecap:round;stroke-linejoin:round;opacity:0.7"/>
+</svg>
