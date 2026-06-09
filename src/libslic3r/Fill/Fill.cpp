@@ -1367,8 +1367,6 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree,
             // modulated Z.  Stored on the filler for distance-based taper —
             // the infill surface itself is NOT shrunk (adhesion is preserved).
             f->fw_safe_expolygons.clear();
-            f->fw_ceiling_z = 0.;
-            f->fw_floor_z   = 0.;
             if (surface_fill.params.pattern == ipFlowWeaving) {
                 const auto &rcfg = layerm->region().config();
                 double z_amp_pct = rcfg.flow_weaving_z_amplitude.value;
@@ -1399,52 +1397,6 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree,
                                 f->fw_safe_expolygons,
                                 union_ex(adj_fill),
                                 ApplySafetyOffset::Yes);
-                        }
-                    }
-
-                    // ── Compute local Z ceiling / floor ──────────────────
-                    // Walk upward: find the first layer above where the
-                    // infill region no longer overlaps with current expoly.
-                    // That layer's print_z is the local ceiling (top surface).
-                    if (z_amp_pct > 0) {
-                        size_t this_idx = this->id(); // 0-based layer index
-                        // Ceiling: walk up
-                        for (size_t li = this_idx + 1; li < all_layers.size(); ++li) {
-                            bool has_overlap = false;
-                            for (const LayerRegion* r : all_layers[li]->regions()) {
-                                if (!r->fill_no_overlap_expolygons.empty()) {
-                                    auto overlap = intersection_ex(f->no_overlap_expolygons, r->fill_no_overlap_expolygons);
-                                    if (!overlap.empty()) {
-                                        has_overlap = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!has_overlap) {
-                                f->fw_ceiling_z = all_layers[li]->print_z;
-                                break;
-                            }
-                        }
-                        // Floor: walk down
-                        if (this_idx > 0) {
-                            for (size_t li = this_idx - 1; li < all_layers.size(); --li) {
-                                bool has_overlap = false;
-                                for (const LayerRegion* r : all_layers[li]->regions()) {
-                                    if (!r->fill_no_overlap_expolygons.empty()) {
-                                        auto overlap = intersection_ex(f->no_overlap_expolygons, r->fill_no_overlap_expolygons);
-                                        if (!overlap.empty()) {
-                                            has_overlap = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (!has_overlap) {
-                                    f->fw_floor_z = all_layers[li]->print_z;
-                                    break;
-                                }
-                                if (li == 0)
-                                    break;
-                            }
                         }
                     }
                 }

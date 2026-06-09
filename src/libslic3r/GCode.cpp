@@ -7639,7 +7639,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                     } else if (sloped == nullptr) {
                         // Flow Weaving Z-modulation (logic in FlowWeavingZModulator.hpp)
                         // Skip Z-mod for sub-paths tagged as outside the safe zone
-                        if (fw_z_active && !path.fw_z_flat) {
+                        if (fw_z_active) {
                             // Use m_layer->height (single layer height), NOT path.height
                             // (which may be combined_infill height = 2× layer_height).
                             // Phase: detect combine_infill from path.height/layer_height ratio
@@ -7650,34 +7650,25 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                                                     m_config.flow_weaving_z_amplitude.value, m_config.flow_weaving_period.value,
                                                                     fw_phase_idx);
 
-                            // ── Adaptive Z clamping ──────────────────────────────
-                            // 1. Walk ALL layers up/down to find the first layer
-                            //    where the XY point exits fill_no_overlap_expolygons.
-                            //    That is the geometric boundary of the model.
-                            // 2. z_flow_tolerance (from flow_weaving_z_flow_tolerance)
-                            //    specifies extra tolerance layers from the boundary.
-                            //    hard_limit = boundary_z - tolerance * layer_height.
-                            // 3. Adaptive: instead of hard clamp, smoothly scale the
-                            //    Z deflection proportionally to available headroom.
-                            //    Far from surfaces → full amplitude.
-                            //    Near surfaces → amplitude reduces to zero.
+                            // ── Adaptive Z clamping (layer-level) ───────────────
+                            // Walk layers up/down to find the nearest layer that
+                            // has an EXTERNAL surface (stTop / stBottom / stBottomBridge).
+                            // Only external surfaces represent the actual model
+                            // boundary.  Internal fills (stInternal, stInternalSolid,
+                            // stInternalVoid, stInternalBridge) are all INSIDE the
+                            // model and must NOT restrict Z-modulation.
+                            // This matches how z_contoured (non-planar ZAA) works —
+                            // it applies z_diff unconditionally within the model.
                             {
-                                const Point xy_pt = line.b.to_point();
                                 const int z_tol = (int)m_config.flow_weaving_z_flow_tolerance.value;
                                 const double lh = m_layer->height;
                                 const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
-                                // Check if xy_pt is inside the SPARSE INFILL region
-                                // of layer l.  We only count stInternal surfaces —
-                                // top/bottom/solid surfaces are the boundary where
-                                // Z-modulation must fade out.  Using
-                                // fill_no_overlap_expolygons (which includes ALL fill
-                                // types) caused the boundary walk to pass through
-                                // solid layers and never clamp at low amplitudes.
-                                auto point_in_sparse_fill = [&xy_pt](const Layer* l) -> bool {
+                                // Check if a layer has an external (top/bottom) surface
+                                auto layer_has_external_surface = [](const Layer* l) -> bool {
                                     for (const LayerRegion* r : l->regions())
                                         for (const Surface& s : r->fill_surfaces.surfaces)
-                                            if (s.surface_type == stInternal && s.expolygon.contains(xy_pt))
+                                            if (s.is_top() || s.is_bottom())
                                                 return true;
                                     return false;
                                 };
@@ -7685,66 +7676,53 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                 double deflection = z - m_nominal_z; // signed
 
                                 if (deflection > 0.) {
-                                    // Going UP: find the ceiling boundary
-                                    double boundary_z = 0.;
-                                    bool found = false;
+                                    // Going UP: find the first external surface layer
+                                    double dist_up = 0.;
                                     const Layer* check = m_layer->upper_layer;
                                     while (check) {
-                                        if (!point_in_sparse_fill(check)) {
-                                            boundary_z = check->bottom_z();
-                                            found = true;
+                                        if (layer_has_external_surface(check)) {
+                                            // Found top/bottom surface — this is the boundary
                                             break;
                                         }
+                                        dist_up += check->height;
                                         check = check->upper_layer;
                                     }
-                                    if (found) {
-                                        // Distance from current nominal Z to the
-                                        // geometric boundary (where fill ends).
-                                        double dist = boundary_z - m_nominal_z;
-                                        if (dist <= 0.) {
-                                            // Already at or above the boundary
+                                    if (check) {
+                                        // External surface found at dist_up above
+                                        double boundary_z = m_nominal_z + dist_up;
+                                        if (dist_up <= 0.) {
                                             z = m_nominal_z;
-                                        } else if (dist <= deflection) {
-                                            // Hard clamp: deflection would exceed
-                                            // the actual geometric boundary
-                                            z = m_nominal_z;
-                                        } else if (tol_zone > 0. && dist < tol_zone) {
-                                            // Inside the tolerance fade-out zone:
-                                            // scale deflection from 0 (at boundary)
-                                            // to full (at tol_zone distance away).
-                                            // This is amplitude-independent and
-                                            // gives the same fade behaviour at
-                                            // 50% as at 500%.
-                                            double scale = dist / tol_zone;
-                                            z = m_nominal_z + deflection * scale;
-                                            // Extra safety: never exceed the boundary
+                                        } else {
+                                            if (tol_zone > 0. && dist_up < tol_zone) {
+                                                double scale = dist_up / tol_zone;
+                                                z = m_nominal_z + deflection * scale;
+                                            }
                                             if (z > boundary_z)
                                                 z = boundary_z;
                                         }
-                                        // else: outside tolerance zone — full amplitude OK
                                     }
+                                    // If no external surface found (check == null),
+                                    // model has no top — no clamping needed.
                                 } else if (deflection < 0.) {
-                                    // Going DOWN: find the floor boundary
-                                    double boundary_z = 0.;
-                                    bool found = false;
+                                    // Going DOWN: find the first external surface layer
+                                    double dist_down = 0.;
                                     const Layer* check = m_layer->lower_layer;
                                     while (check) {
-                                        if (!point_in_sparse_fill(check)) {
-                                            boundary_z = check->print_z;
-                                            found = true;
+                                        if (layer_has_external_surface(check)) {
                                             break;
                                         }
+                                        dist_down += check->height;
                                         check = check->lower_layer;
                                     }
-                                    if (found) {
-                                        double dist = m_nominal_z - boundary_z;
-                                        if (dist <= 0.) {
+                                    if (check) {
+                                        double boundary_z = m_nominal_z - dist_down;
+                                        if (dist_down <= 0.) {
                                             z = m_nominal_z;
-                                        } else if (dist <= -deflection) {
-                                            z = m_nominal_z;
-                                        } else if (tol_zone > 0. && dist < tol_zone) {
-                                            double scale = dist / tol_zone;
-                                            z = m_nominal_z + deflection * scale;
+                                        } else {
+                                            if (tol_zone > 0. && dist_down < tol_zone) {
+                                                double scale = dist_down / tol_zone;
+                                                z = m_nominal_z + deflection * scale;
+                                            }
                                             if (z < boundary_z)
                                                 z = boundary_z;
                                         }
