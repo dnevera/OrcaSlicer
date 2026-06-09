@@ -7650,49 +7650,99 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                                                     m_config.flow_weaving_z_amplitude.value, m_config.flow_weaving_period.value,
                                                                     fw_phase_idx);
 
-                            // ── Model-aware Z clamping ──────────────────────────
-                            // Walk up/down through layers and verify the point
-                            // is inside the MODEL at each layer via lslices
-                            // (full cross-section).  We use lslices, NOT
-                            // fill_surfaces, because fill_surfaces excludes
-                            // perimeter zones — making Z depend on infill
-                            // region width (XY size).  Z must only clamp when
-                            // the point exits the model entirely.
+                            // ── Inner-perimeter Z clamping ───────────────────────
+                            // For each point, check if the XY position is inside
+                            // the fill_no_overlap_expolygons (inner perimeter
+                            // boundary) at the layer corresponding to the
+                            // modulated Z.  This handles ALL boundary types:
+                            //   • horizontal top/bottom surfaces (e.g. Benchy deck)
+                            //   • sloped/angled walls (inner perimeter shifts)
+                            //   • model edges
+                            // Z top offset extends the check by N extra layers
+                            // beyond the modulated Z for additional safety margin.
+                            // The check is per-point: no XY-size dependency.
                             {
                                 const Point xy_pt = line.b.to_point();
+                                const int z_top_offset = (int)m_config.flow_weaving_z_top_offset.value;
 
-                                auto point_inside_model = [&xy_pt](const Layer* l) -> bool {
-                                    for (const ExPolygon& ep : l->lslices)
-                                        if (ep.contains(xy_pt))
-                                            return true;
+                                // Check if xy_pt is inside the fill region of layer l
+                                auto point_in_fill_region = [&xy_pt](const Layer* l) -> bool {
+                                    for (const LayerRegion* r : l->regions())
+                                        for (const ExPolygon& ep : r->fill_no_overlap_expolygons)
+                                            if (ep.contains(xy_pt))
+                                                return true;
                                     return false;
                                 };
 
                                 if (z > m_nominal_z) {
-                                    // Going UP: walk upper layers
+                                    // Going UP: walk upper layers until we find one
+                                    // where the point is outside the fill region
                                     const Layer* check = m_layer->upper_layer;
                                     while (check && z >= check->bottom_z()) {
-                                        if (!point_inside_model(check)) {
-                                            const double margin = m_layer->height * m_config.flow_weaving_z_top_offset.value;
-                                            z                   = std::min(z, check->bottom_z() - margin);
+                                        if (!point_in_fill_region(check)) {
+                                            // Point exits inner perimeter at this layer
+                                            z = std::min(z, check->bottom_z());
                                             if (z < m_nominal_z)
                                                 z = m_nominal_z;
                                             break;
                                         }
                                         check = check->upper_layer;
                                     }
+                                    // Z top offset: even if we didn't clamp yet,
+                                    // check N additional layers above modulated Z
+                                    if (z_top_offset > 0 && z > m_nominal_z) {
+                                        const Layer* extra = m_layer->upper_layer;
+                                        int layers_above = 0;
+                                        while (extra) {
+                                            if (extra->bottom_z() > z) {
+                                                // This layer is above modulated Z
+                                                ++layers_above;
+                                                if (layers_above <= z_top_offset) {
+                                                    if (!point_in_fill_region(extra)) {
+                                                        z = std::min(z, extra->bottom_z() - m_layer->height * layers_above);
+                                                        if (z < m_nominal_z)
+                                                            z = m_nominal_z;
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            extra = extra->upper_layer;
+                                        }
+                                    }
                                 } else if (z < m_nominal_z) {
                                     // Going DOWN: walk lower layers
                                     const Layer* check = m_layer->lower_layer;
                                     while (check && z <= check->print_z) {
-                                        if (!point_inside_model(check)) {
-                                            const double margin = m_layer->height * m_config.flow_weaving_z_top_offset.value;
-                                            z                   = std::max(z, check->print_z + margin);
+                                        if (!point_in_fill_region(check)) {
+                                            z = std::max(z, check->print_z);
                                             if (z > m_nominal_z)
                                                 z = m_nominal_z;
                                             break;
                                         }
                                         check = check->lower_layer;
+                                    }
+                                    // Z top offset: check N additional layers below
+                                    if (z_top_offset > 0 && z < m_nominal_z) {
+                                        const Layer* extra = m_layer->lower_layer;
+                                        int layers_below = 0;
+                                        while (extra) {
+                                            if (extra->print_z < z) {
+                                                ++layers_below;
+                                                if (layers_below <= z_top_offset) {
+                                                    if (!point_in_fill_region(extra)) {
+                                                        z = std::max(z, extra->print_z + m_layer->height * layers_below);
+                                                        if (z > m_nominal_z)
+                                                            z = m_nominal_z;
+                                                        break;
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            extra = extra->lower_layer;
+                                        }
                                     }
                                 }
                                 // Absolute floor safety
