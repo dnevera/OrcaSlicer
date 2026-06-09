@@ -25,6 +25,7 @@
 #include "Time.hpp"
 #include "GCode/ExtrusionProcessor.hpp"
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
@@ -7630,23 +7631,36 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                             {
                                 const Point xy_pt = line.b.to_point();
 
-                                // Helper: check if point is inside SPARSE INFILL
-                                // area of a layer.  Returns true only if the point
-                                // is within a fill_surface typed as stInternal or
-                                // stInternalVoid (sparse infill).  Returns false
-                                // for perimeters, top/bottom surfaces, solid infill,
-                                // and holes — these are boundaries the Z-modulation
-                                // must not penetrate.
-                                auto point_in_sparse_infill = [&xy_pt](const Layer *l) -> bool {
-                                    for (const LayerRegion *lr : l->regions()) {
-                                        for (const Surface &s : lr->fill_surfaces.surfaces) {
-                                            if ((s.surface_type == stInternal ||
-                                                 s.surface_type == stInternalVoid) &&
-                                                s.expolygon.contains(xy_pt))
-                                                return true;
-                                        }
-                                    }
-                                    return false;
+                                // Helper: check if the FULL extrusion footprint
+                                // is inside SPARSE INFILL at a layer.  We check
+                                // not just the center point but also 4 points at
+                                // ±half_width offsets (N/S/E/W).  This accounts
+                                // for the physical nozzle width — with few
+                                // perimeters, the center may pass but the outer
+                                // edge of the extrusion protrudes into walls or
+                                // top surfaces.
+                                const coord_t hw = scale_(path.width * 0.5);
+                                const std::array<Point, 5> check_pts = {{
+                                    xy_pt,
+                                    {xy_pt.x() + hw, xy_pt.y()},
+                                    {xy_pt.x() - hw, xy_pt.y()},
+                                    {xy_pt.x(), xy_pt.y() + hw},
+                                    {xy_pt.x(), xy_pt.y() - hw}
+                                }};
+                                auto point_in_sparse_infill = [&check_pts](const Layer *l) -> bool {
+                                    auto pt_in_sparse = [&](const Point &pt) -> bool {
+                                        for (const LayerRegion *lr : l->regions())
+                                            for (const Surface &s : lr->fill_surfaces.surfaces)
+                                                if ((s.surface_type == stInternal ||
+                                                     s.surface_type == stInternalVoid) &&
+                                                    s.expolygon.contains(pt))
+                                                    return true;
+                                        return false;
+                                    };
+                                    for (const Point &pt : check_pts)
+                                        if (!pt_in_sparse(pt))
+                                            return false;
+                                    return true;
                                 };
 
                                 if (z > m_nominal_z) {
