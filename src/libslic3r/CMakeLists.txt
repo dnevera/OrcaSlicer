@@ -151,6 +151,9 @@ set(lisbslic3r_sources
     Fill/Fill.cpp
     Fill/FillCrossHatch.cpp
     Fill/FillCrossHatch.hpp
+    Fill/FlowWeaving/FillFlowWeaving.cpp
+    Fill/FlowWeaving/FillFlowWeaving.hpp
+    Fill/FlowWeaving/FlowWeavingZModulator.hpp
     Fill/FillGyroid.cpp
     Fill/FillGyroid.hpp
     Fill/FillHoneycomb.cpp

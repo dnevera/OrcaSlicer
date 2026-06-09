@@ -259,7 +259,8 @@ static t_config_enum_values s_keys_map_InfillPattern {
     { "concentric", ipConcentric },
     { "hilbertcurve", ipHilbertCurve },
     { "archimedeanchords", ipArchimedeanChords },
-    { "octagramspiral", ipOctagramSpiral }
+    { "octagramspiral", ipOctagramSpiral },
+    { "flowweaving",     ipFlowWeaving }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InfillPattern)
 
@@ -3194,6 +3195,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("hilbertcurve");
     def->enum_values.push_back("archimedeanchords");
     def->enum_values.push_back("octagramspiral");
+    def->enum_values.push_back("flowweaving");
     def->enum_labels.push_back(L("Rectilinear"));
     def->enum_labels.push_back(L("Aligned Rectilinear"));
     def->enum_labels.push_back(L("Zig Zag"));
@@ -3220,6 +3222,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Hilbert Curve"));
     def->enum_labels.push_back(L("Archimedean Chords"));
     def->enum_labels.push_back(L("Octagram Spiral"));
+    def->enum_labels.push_back(L("Flow Weaving"));
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
     def           = this->add("lateral_lattice_angle_1", coFloat);
@@ -4578,6 +4581,40 @@ void PrintConfigDef::init_fff_params()
     def->max      = 100;
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionFloat(0.05));
+
+    // ─── Flow Weaving ───────────────────────────────────────────────────
+    def           = this->add("flow_weaving_z_amplitude", coFloat);
+    def->label    = L("Z amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Amplitude of Z-height modulation as percentage of layer height. "
+                       "Higher values create deeper interlocking but may affect surface quality.");
+    def->sidetext = L("%");
+    def->min      = 1;
+    def->mode     = comExpert;
+    def->set_default_value(new ConfigOptionFloat(50));
+
+    def           = this->add("flow_weaving_xy_amplitude", coFloat);
+    def->label    = L("XY width amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Amplitude of extrusion width modulation as percentage of nominal width. "
+                       "15% means width varies from ~0.93x to ~1.15x nominal. "
+                       "Controls the in-plane interlocking depth. Set to 0 to disable XY modulation.");
+    def->sidetext = L("%");
+    def->min      = 1;
+    def->mode     = comExpert;
+    def->set_default_value(new ConfigOptionFloat(80));
+
+    def           = this->add("flow_weaving_period", coFloat);
+    def->label    = L("Wave period");
+    def->category = L("Strength");
+    def->tooltip  = L("Length of one complete wave cycle along the extrusion path. "
+                       "Shorter periods create denser interlocking. "
+                       "A good starting point is the nozzle diameter.");
+    def->sidetext = L("mm");
+    def->min      = 0.2;
+    def->max      = 10.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.0));
 
     def = this->add("layer_change_gcode", coString);
     def->label = L("Layer change G-code");

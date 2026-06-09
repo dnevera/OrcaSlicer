@@ -2505,6 +2505,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("filter_out_gap_fill", "strength_settings_infill#filter-out-tiny-gaps");
         optgroup->append_single_option_line("infill_wall_overlap", "strength_settings_infill#infill-wall-overlap");
 
+        optgroup = page->new_optgroup(L("Flow weaving"), L"param_flowweaving_group");
+        optgroup->append_single_option_line("flow_weaving_z_amplitude");
+        optgroup->append_single_option_line("flow_weaving_xy_amplitude");
+        optgroup->append_single_option_line("flow_weaving_period");
+
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");
         optgroup->append_single_option_line("extra_solid_infills", "strength_settings_infill#extra-solid-infill");
@@ -2935,6 +2940,17 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
+}
+
+void TabPrint::update_custom_dirty(std::vector<std::string>& dirty_options, std::vector<std::string>& nonsys_options)
+{
+    // When Flow Weaving is active, density is forced to 100% for display.
+    // Don't mark it as dirty (no orange text, no reset arrow).
+    if (m_config->opt_enum<InfillPattern>("sparse_infill_pattern") == ipFlowWeaving) {
+        const std::string key = "sparse_infill_density";
+        dirty_options.erase(std::remove(dirty_options.begin(), dirty_options.end(), key), dirty_options.end());
+        nonsys_options.erase(std::remove(nonsys_options.begin(), nonsys_options.end(), key), nonsys_options.end());
+    }
 }
 
 //BBS: GUI refactor

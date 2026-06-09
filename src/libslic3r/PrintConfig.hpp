@@ -93,6 +93,7 @@ enum InfillPattern : int {
     ipHoneycomb, ip3DHoneycomb, ipLateralHoneycomb, ipLateralLattice,
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
     ipConcentric, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
+    ipFlowWeaving,
     ipSupportBase, ipConcentricInternal,
     ipCount,
 };
@@ -1394,6 +1395,11 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, zaa_dont_alternate_fill_direction))
     ((ConfigOptionFloat, zaa_min_z))
     ((ConfigOptionFloat, zaa_minimize_perimeter_height))
+
+    // Flow Weaving: virtual layer interlocking via Z + width modulation
+    ((ConfigOptionFloat,                  flow_weaving_z_amplitude))
+    ((ConfigOptionFloat,                  flow_weaving_xy_amplitude))
+    ((ConfigOptionFloat,                  flow_weaving_period))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

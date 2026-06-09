@@ -16,6 +16,7 @@
 #include "GCode/WipeTower.hpp"
 #include "ShortestPath.hpp"
 #include "Print.hpp"
+#include "Fill/FlowWeaving/FlowWeavingZModulator.hpp"
 #include "Utils.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r.h"
@@ -4851,6 +4852,11 @@ LayerResult GCode::process_layer(
     m_layer = &layer;
     m_object_layer_over_raft = false;
 
+    // Flow Weaving: tell the Z-modulator where the model top face is
+    // so the sine wave doesn't protrude above it.
+    if (const auto *obj = layer.object(); obj && !obj->layers().empty())
+        m_fw_z_mod.set_top_z(obj->layers().back()->print_z);
+
     if (!m_config.time_lapse_gcode.value.empty() && !is_BBL_Printer()) {
         DynamicConfig config;
         config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index));
@@ -6537,6 +6543,7 @@ std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const
     //This is used for adaptive PA
     m_multi_flow_segment_path_pa_set = false; // always emit PA on the first path of the multi-path
     m_multi_flow_segment_path_average_mm3_per_mm = 0;
+    m_fw_z_mod.reset_path(); // reset cumulative distance for Z modulation
     double weighted_sum_mm3_per_mm = 0.0;
     double total_multipath_length = 0.0;
     for (const ExtrusionPath& path : multipath.paths) {
@@ -6886,7 +6893,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             gcode += m_writer.travel_to_z(first_z, "set Z for contouring", true);
         }
     }
-    if (!path.z_contoured && sloped == nullptr) {
+    if (!path.z_contoured && sloped == nullptr &&
+        !m_fw_z_mod.should_skip_z_reset(m_config.sparse_infill_pattern.value, m_config.flow_weaving_z_amplitude.value, m_layer,
+                                        path.role())) {
         double current_z = m_writer.get_position().z();
         if (GCodeFormatter::quantize_xyzf(current_z) != GCodeFormatter::quantize_xyzf(m_nominal_z)) {
             gcode += this->writer().travel_to_z(m_nominal_z, "reset Z after contouring", true);
@@ -7544,20 +7553,27 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                                          GCodeWriter::full_gcode_comment ? tempDescription : "");
 
                     } else if (sloped == nullptr) {
-                        // Normal extrusion
-                        gcode += m_writer.extrude_to_xy(
-                            this->point_to_gcode(line.b.to_point()),
-                            dE,
-                            GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                        // Flow Weaving Z-modulation (logic in FlowWeavingZModulator.hpp)
+                        if (m_fw_z_mod.is_active(m_config.sparse_infill_pattern.value, m_config.flow_weaving_z_amplitude.value, m_layer,
+                                                 path.role())) {
+                            double z     = m_fw_z_mod.compute_z(m_nominal_z, path_length, path.height,
+                                                                m_config.flow_weaving_z_amplitude.value,
+                                                                m_config.flow_weaving_period.value, m_layer->id());
+                            Vec2d dest2d = this->point_to_gcode(line.b.to_point());
+                            gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), z), dE,
+                                                             GCodeWriter::full_gcode_comment ? tempDescription : "");
+                        } else {
+                            gcode += m_writer.extrude_to_xy(this->point_to_gcode(line.b.to_point()), dE,
+                                                            GCodeWriter::full_gcode_comment ? tempDescription : "",
+                                                            path.is_force_no_extrusion());
+                        }
                     } else {
                         // Sloped extrusion
                         const auto [z_ratio, e_ratio] = sloped->interpolate(path_length / total_length);
-                        Vec2d dest2d = this->point_to_gcode(line.b.to_point());
+                        Vec2d dest2d                  = this->point_to_gcode(line.b.to_point());
                         Vec3d dest3d(dest2d(0), dest2d(1), get_sloped_z(z_ratio));
-                        gcode += m_writer.extrude_to_xyz(
-                            dest3d,
-                            dE * e_ratio,
-                            GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                        gcode += m_writer.extrude_to_xyz(dest3d, dE * e_ratio, GCodeWriter::full_gcode_comment ? tempDescription : "",
+                                                         path.is_force_no_extrusion());
                     }
                 }
             } else {
@@ -7622,6 +7638,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     }
                 }
             }
+            // Flow Weaving: carry cumulative distance to next sub-path
+            m_fw_z_mod.advance(path_length);
         }
     } else {
         double last_set_speed = new_points[0].speed * 60.0;

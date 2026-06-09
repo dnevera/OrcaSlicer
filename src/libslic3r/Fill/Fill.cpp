@@ -897,7 +897,9 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                             params.density = float(region_config.bottom_surface_density);
                         }
                     } else if (surface.is_solid_infill()) {
-                        params.pattern = region_config.internal_solid_infill_pattern.value;
+                        // Flow Weaving must keep its own pattern even for solid surfaces
+                        if (region_config.sparse_infill_pattern.value != ipFlowWeaving)
+                            params.pattern = region_config.internal_solid_infill_pattern.value;
                         params.density = 100.f;
                     } else {
                         if (region_config.top_surface_pattern == ipMonotonic || region_config.top_surface_pattern == ipMonotonicLine)
@@ -1442,7 +1444,8 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(FillAdaptive::Oc
         case ipOctagramSpiral:
         case ipZigZag:
         case ipCrossZag:
-		case ipLockedZag: break;
+		case ipLockedZag:
+        case ipFlowWeaving: break;
         }
 
         // Create the filler object.
