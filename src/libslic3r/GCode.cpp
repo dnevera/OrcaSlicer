@@ -7576,6 +7576,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                                          path.is_force_no_extrusion());
                     }
                 }
+                // Flow Weaving: carry cumulative distance to next sub-path
+                m_fw_z_mod.advance(path_length);
             } else {
                 // BBS: start to generate gcode from arc fitting data which includes line and arc
                 const std::vector<PathFittingData>& fitting_result = path.polyline.fitting_result;
@@ -7638,8 +7640,6 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     }
                 }
             }
-            // Flow Weaving: carry cumulative distance to next sub-path
-            m_fw_z_mod.advance(path_length);
         }
     } else {
         double last_set_speed = new_points[0].speed * 60.0;
