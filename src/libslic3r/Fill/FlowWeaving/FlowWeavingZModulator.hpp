@@ -119,10 +119,9 @@ public:
     // surfaces, model edges) is handled by lslices-based clamping in
     // GCode.cpp _extrude().
     inline double compute_z(
-        double nominal_z, double local_path_length, double layer_height, double z_amplitude, double period, int phase_idx) const
+        double nominal_z, double local_path_length, double layer_height, double z_amplitude, double period, int phase_idx,
+        double first_layer_z = 0.2) const
     {
-        static constexpr double kMinZ = 0.05; // absolute Z floor (mm)
-
         const double dist = m_path_offset + local_path_length;
         const double amp  = z_amplitude / 100.0; // % → fraction
 
@@ -139,9 +138,10 @@ public:
         // model-aware clamping (lslices check) in GCode.cpp.
         double z = nominal_z + desired * t;
 
-        // Absolute floor: never go below bed
-        if (z < kMinZ)
-            z = kMinZ;
+        // Safety floor: never go below the first layer print_z.
+        // The nozzle must never descend below the bed surface.
+        if (z < first_layer_z)
+            z = first_layer_z;
         return z;
     }
 

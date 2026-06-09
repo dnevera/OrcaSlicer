@@ -4950,8 +4950,6 @@ LayerResult GCode::process_layer(const Print& print,
     m_layer                  = &layer;
     m_object_layer_over_raft = false;
 
-
-
     if (!m_config.time_lapse_gcode.value.empty() && !is_BBL_Printer()) {
         DynamicConfig config;
         config.set_key_value("layer_num", new ConfigOptionInt(m_layer_index));
@@ -7648,7 +7646,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                             int fw_phase_idx = m_layer->id() / combine_step;
                             double z         = m_fw_z_mod.compute_z(m_nominal_z, path_length, m_layer->height,
                                                                     m_config.flow_weaving_z_amplitude.value, m_config.flow_weaving_period.value,
-                                                                    fw_phase_idx);
+                                                                    fw_phase_idx, m_config.initial_layer_print_height.value);
 
                             // ── Adaptive Z clamping (layer-level) ───────────────
                             // Walk layers up/down to find the nearest layer that
@@ -7660,8 +7658,8 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                             // This matches how z_contoured (non-planar ZAA) works —
                             // it applies z_diff unconditionally within the model.
                             {
-                                const int z_tol = (int)m_config.flow_weaving_z_flow_tolerance.value;
-                                const double lh = m_layer->height;
+                                const int z_tol       = (int) m_config.flow_weaving_z_flow_tolerance.value;
+                                const double lh       = m_layer->height;
                                 const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
                                 // Check if a layer has an external (top/bottom) surface
@@ -7677,7 +7675,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
 
                                 if (deflection > 0.) {
                                     // Going UP: find the first external surface layer
-                                    double dist_up = 0.;
+                                    double dist_up     = 0.;
                                     const Layer* check = m_layer->upper_layer;
                                     while (check) {
                                         if (layer_has_external_surface(check)) {
@@ -7695,7 +7693,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                         } else {
                                             if (tol_zone > 0. && dist_up < tol_zone) {
                                                 double scale = dist_up / tol_zone;
-                                                z = m_nominal_z + deflection * scale;
+                                                z            = m_nominal_z + deflection * scale;
                                             }
                                             if (z > boundary_z)
                                                 z = boundary_z;
@@ -7705,7 +7703,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                     // model has no top — no clamping needed.
                                 } else if (deflection < 0.) {
                                     // Going DOWN: find the first external surface layer
-                                    double dist_down = 0.;
+                                    double dist_down   = 0.;
                                     const Layer* check = m_layer->lower_layer;
                                     while (check) {
                                         if (layer_has_external_surface(check)) {
@@ -7721,16 +7719,16 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                         } else {
                                             if (tol_zone > 0. && dist_down < tol_zone) {
                                                 double scale = dist_down / tol_zone;
-                                                z = m_nominal_z + deflection * scale;
+                                                z            = m_nominal_z + deflection * scale;
                                             }
                                             if (z < boundary_z)
                                                 z = boundary_z;
                                         }
                                     }
                                 }
-                                // Absolute floor safety
-                                if (z < 0.05)
-                                    z = 0.05;
+                                // Absolute floor safety: never below first layer
+                                if (z < m_config.initial_layer_print_height.value)
+                                    z = m_config.initial_layer_print_height.value;
                             }
 
                             Vec2d dest2d = this->point_to_gcode(line.b.to_point());
