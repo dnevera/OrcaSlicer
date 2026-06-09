@@ -164,6 +164,9 @@ public:
     float height;
     double smooth_speed = 0;
     bool z_contoured = false;
+    // Flow Weaving: when true, Z-modulation is suppressed for this sub-path
+    // (segment is outside the safe zone computed from adjacent layers' walls).
+    bool fw_z_flat = false;
 
     ExtrusionPath() : mm3_per_mm(-1), width(-1), height(-1), m_role(erNone), m_no_extrusion(false) {}
     ExtrusionPath(ExtrusionRole role) : mm3_per_mm(-1), width(-1), height(-1), m_role(role), m_no_extrusion(false) {}
@@ -178,6 +181,7 @@ public:
         , height(rhs.height)
         , smooth_speed(rhs.smooth_speed)
         , z_contoured(rhs.z_contoured)
+        , fw_z_flat(rhs.fw_z_flat)
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
@@ -191,6 +195,7 @@ public:
         , height(rhs.height)
         , smooth_speed(rhs.smooth_speed)
         , z_contoured(rhs.z_contoured)
+        , fw_z_flat(rhs.fw_z_flat)
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
@@ -204,6 +209,7 @@ public:
         , height(rhs.height)
         , smooth_speed(rhs.smooth_speed)
         , z_contoured(rhs.z_contoured)
+        , fw_z_flat(rhs.fw_z_flat)
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
@@ -217,6 +223,7 @@ public:
         , height(rhs.height)
         , smooth_speed(rhs.smooth_speed)
         , z_contoured(rhs.z_contoured)
+        , fw_z_flat(rhs.fw_z_flat)
         , m_can_reverse(rhs.m_can_reverse)
         , m_role(rhs.m_role)
         , m_no_extrusion(rhs.m_no_extrusion)
@@ -231,6 +238,7 @@ public:
         this->height = rhs.height;
         this->smooth_speed = rhs.smooth_speed;
         this->z_contoured = rhs.z_contoured;
+        this->fw_z_flat = rhs.fw_z_flat;
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = rhs.polyline;
@@ -245,6 +253,7 @@ public:
         this->height = rhs.height;
         this->smooth_speed = rhs.smooth_speed;
         this->z_contoured = rhs.z_contoured;
+        this->fw_z_flat = rhs.fw_z_flat;
         this->overhang_degree = rhs.overhang_degree;
         this->curve_degree = rhs.curve_degree;
         this->polyline = std::move(rhs.polyline);

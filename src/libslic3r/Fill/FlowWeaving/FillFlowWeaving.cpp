@@ -108,12 +108,27 @@ void FillFlowWeaving::fill_surface_extrusion(
     out.push_back(eec);
 
     // ── Step 7: Width-modulated sub-segment generation ────────────────────
+    double xy_amplitude = (fw_wratio - 1.0) / 2.0;
+    // Supplementary endpoint taper distance — smooths the transition at
+    // line endpoints even when the safe zone extends all the way to the wall.
+    double xy_taper_dist = base_w * xy_amplitude * 0.5;
+
+    // Whether we have a precise safe zone from multi-layer wall intersection
+    const bool have_safe_zone = !this->fw_safe_expolygons.empty();
+
     for (Polyline &pl : polylines) {
         if (pl.points.size() < 2)
             continue;
 
+        // Pre-compute total polyline length for supplementary endpoint taper
+        double total_pl_len = 0.0;
+        for (size_t i = 1; i < pl.points.size(); ++i) {
+            Vec2d seg = pl.points[i].cast<double>() - pl.points[i-1].cast<double>();
+            total_pl_len += unscale<double>(seg.norm());
+        }
+
         ExtrusionMultiPath *mp = new ExtrusionMultiPath();
-        double accumulated = 0.0;   // distance accumulated along the polyline
+        double accumulated = 0.0;
 
         for (size_t i = 1; i < pl.points.size(); ++i) {
             Vec2d a = pl.points[i - 1].cast<double>();
@@ -129,33 +144,60 @@ void FillFlowWeaving::fill_surface_extrusion(
             Vec2d dir = (b - a) / seg_len_scaled;
 
             for (int s = 0; s < n_subs; ++s) {
-                // Evaluate sin at midpoint of sub-segment for stable sampling
                 double pos = accumulated + sub_len * (s + 0.5);
                 double t = std::sin(2.0 * M_PI * pos / fw_period + phase);
 
-                // Width modulation factor (symmetric around 1.0):
-                //   amplitude = (wratio - 1.0) / 2.0
-                //   factor = 1.0 + amplitude × sin(θ)
-                //
-                //   t ∈ [-1,+1] → factor ∈ [1-amp, 1+amp]
-                //   Average factor = 1.0 → no net over/under-extrusion
-                //
-                //   Example: wratio=1.30 (15%) → amp=0.15
-                //     factor ∈ [0.85, 1.15], avg = 1.0
-                double amplitude = (fw_wratio - 1.0) / 2.0;
-                double factor = 1.0 + amplitude * t;
-                // Clamp factor to prevent negative/zero widths at extreme amplitudes
+                // ── Modulation gating ────────────────────────────────
+                // Primary: check if sub-segment midpoint is inside the
+                // safe zone (intersection of all adjacent layers' walls).
+                // If outside → modulation = 0 (nominal width at wall).
+                // If inside  → full modulation, with endpoint taper as
+                //              supplementary smoothing.
+                double taper = 1.0;
+                if (have_safe_zone) {
+                    // Compute midpoint in scaled coordinates
+                    Point midpt = (a + dir * scale_(sub_len * (s + 0.5))).cast<coord_t>();
+                    bool inside_safe = false;
+                    for (const ExPolygon &ep : this->fw_safe_expolygons) {
+                        if (ep.contains(midpt)) {
+                            inside_safe = true;
+                            break;
+                        }
+                    }
+                    if (!inside_safe)
+                        taper = 0.0;
+                }
+
+                // Supplementary: endpoint taper for smooth transition
+                // at line start/end (always active, even without safe zone)
+                if (taper > 0. && xy_taper_dist > 0.01 && total_pl_len > 0.) {
+                    double eff_td = std::min(xy_taper_dist, total_pl_len * 0.45);
+                    double d_wall = std::min(pos, total_pl_len - pos);
+                    if (d_wall <= 0.)
+                        taper = 0.0;
+                    else if (d_wall < eff_td) {
+                        double r = d_wall / eff_td;
+                        taper *= r * r * (3.0 - 2.0 * r); // smoothstep
+                    }
+                }
+
+                // Width modulation:
+                //   inside safe zone + away from endpoints: full modulation
+                //   outside safe zone OR at endpoints: nominal width
+                double factor = 1.0 + xy_amplitude * taper * t;
                 if (factor < 0.1)
                     factor = 0.1;
                 double sub_mm3 = base_mm3 * factor;
                 float  sub_w   = base_w * (float)factor;
 
-                // Sub-segment endpoints (scaled coordinates)
                 Point sub_a = (a + dir * scale_(sub_len * s)).cast<coord_t>();
                 Point sub_b = (a + dir * scale_(sub_len * (s + 1))).cast<coord_t>();
 
                 ExtrusionPath path(params.extrusion_role, sub_mm3, sub_w, base_h);
                 path.polyline.points = { Point3(sub_a, 0), Point3(sub_b, 0) };
+                // Tag sub-paths outside the safe zone for Z-modulation suppression
+                if (have_safe_zone && taper == 0.0)
+                    path.fw_z_flat = true;
                 mp->paths.push_back(std::move(path));
             }
             accumulated += seg_len;

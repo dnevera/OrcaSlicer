@@ -1336,6 +1336,88 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 		for (ExPolygon& expoly : surface_fill.expolygons) {
 
       f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
+
+            // ── Flow Weaving: compute safe zone from adjacent layers ─────────
+            // Intersect current layer's no_overlap with fill_no_overlap of all
+            // layers visited during Z-modulation.  This gives the precise
+            // region where the nozzle stays inside perimeter walls at EVERY
+            // modulated Z.  Stored on the filler for distance-based taper —
+            // the infill surface itself is NOT shrunk (adhesion is preserved).
+            f->fw_safe_expolygons.clear();
+            f->fw_ceiling_z = 0.;
+            f->fw_floor_z   = 0.;
+            if (surface_fill.params.pattern == ipFlowWeaving) {
+                const auto &rcfg = layerm->region().config();
+                double z_amp_pct = rcfg.flow_weaving_z_amplitude.value;
+                if (z_amp_pct > 0) {
+                    f->fw_safe_expolygons = f->no_overlap_expolygons; // start with current
+                    double z_deflection = (z_amp_pct / 100.0) * this->height;
+                    double z_lo = this->print_z - z_deflection;
+                    double z_hi = this->print_z + z_deflection;
+                    const auto &all_layers = this->object()->layers();
+                    for (const Layer *adj : all_layers) {
+                        if (adj == this || adj->print_z < z_lo || adj->print_z > z_hi)
+                            continue;
+                        for (const LayerRegion *adj_region : adj->regions()) {
+                            if (!adj_region->fill_no_overlap_expolygons.empty()) {
+                                f->fw_safe_expolygons = intersection_ex(
+                                    f->fw_safe_expolygons,
+                                    adj_region->fill_no_overlap_expolygons,
+                                    ApplySafetyOffset::Yes);
+                            }
+                        }
+                    }
+
+                    // ── Compute local Z ceiling / floor ──────────────────
+                    // Walk upward: find the first layer above where the
+                    // infill region no longer overlaps with current expoly.
+                    // That layer's print_z is the local ceiling (top surface).
+                    size_t this_idx = this->id(); // 0-based layer index
+                    // Ceiling: walk up
+                    for (size_t li = this_idx + 1; li < all_layers.size(); ++li) {
+                        bool has_overlap = false;
+                        for (const LayerRegion *r : all_layers[li]->regions()) {
+                            if (!r->fill_no_overlap_expolygons.empty()) {
+                                auto overlap = intersection_ex(
+                                    f->no_overlap_expolygons,
+                                    r->fill_no_overlap_expolygons);
+                                if (!overlap.empty()) {
+                                    has_overlap = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!has_overlap) {
+                            // This layer has no sparse infill overlapping our region →
+                            // it's a solid/top surface. Its print_z is our ceiling.
+                            f->fw_ceiling_z = all_layers[li]->print_z;
+                            break;
+                        }
+                    }
+                    // Floor: walk down
+                    if (this_idx > 0) {
+                        for (size_t li = this_idx - 1; li < all_layers.size(); --li) {
+                            bool has_overlap = false;
+                            for (const LayerRegion *r : all_layers[li]->regions()) {
+                                if (!r->fill_no_overlap_expolygons.empty()) {
+                                    auto overlap = intersection_ex(
+                                        f->no_overlap_expolygons,
+                                        r->fill_no_overlap_expolygons);
+                                    if (!overlap.empty()) {
+                                        has_overlap = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!has_overlap) {
+                                f->fw_floor_z = all_layers[li]->print_z;
+                                break;
+                            }
+                            if (li == 0) break;
+                        }
+                    }
+                }
+            }
             if (params.symmetric_infill_y_axis) {
                 params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
                 expoly.symmetric_y(params.symmetric_y_axis);

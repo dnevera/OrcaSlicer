@@ -4852,10 +4852,51 @@ LayerResult GCode::process_layer(
     m_layer = &layer;
     m_object_layer_over_raft = false;
 
-    // Flow Weaving: tell the Z-modulator where the model top face is
-    // so the sine wave doesn't protrude above it.
-    if (const auto *obj = layer.object(); obj && !obj->layers().empty())
-        m_fw_z_mod.set_top_z(obj->layers().back()->print_z);
+    // Flow Weaving: compute local Z ceiling and floor for this layer.
+    // Instead of using the absolute model top, walk layers upward to find
+    // the first layer where there is no sparse infill (= top surface).
+    // This prevents Z-modulation from penetrating through intermediate
+    // solid surfaces (e.g. the Benchy deck).
+    if (const auto *obj = layer.object(); obj && !obj->layers().empty()) {
+        const auto &all_layers = obj->layers();
+        double ceiling_z = all_layers.back()->print_z; // fallback: model top
+        double floor_z   = 0.05;                        // fallback: bed
+        size_t this_idx  = layer.id();
+
+        // Walk up: find first layer without sparse infill
+        for (size_t li = this_idx + 1; li < all_layers.size(); ++li) {
+            bool has_infill = false;
+            for (const LayerRegion *r : all_layers[li]->regions()) {
+                if (!r->fill_no_overlap_expolygons.empty()) {
+                    has_infill = true;
+                    break;
+                }
+            }
+            if (!has_infill) {
+                ceiling_z = all_layers[li]->print_z;
+                break;
+            }
+        }
+        // Walk down: find first layer without sparse infill
+        if (this_idx > 0) {
+            for (size_t li = this_idx - 1; ; --li) {
+                bool has_infill = false;
+                for (const LayerRegion *r : all_layers[li]->regions()) {
+                    if (!r->fill_no_overlap_expolygons.empty()) {
+                        has_infill = true;
+                        break;
+                    }
+                }
+                if (!has_infill) {
+                    floor_z = all_layers[li]->print_z;
+                    break;
+                }
+                if (li == 0) break;
+            }
+        }
+        m_fw_z_mod.set_top_z(ceiling_z);
+        m_fw_z_mod.set_floor_z(floor_z);
+    }
 
     if (!m_config.time_lapse_gcode.value.empty() && !is_BBL_Printer()) {
         DynamicConfig config;
@@ -6553,6 +6594,7 @@ std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const
             total_multipath_length += path_length;
         }
     }
+    m_fw_z_mod.set_total_path_length(total_multipath_length); // for wall taper
     if (total_multipath_length > 0.0)
         m_multi_flow_segment_path_average_mm3_per_mm = weighted_sum_mm3_per_mm / total_multipath_length;
     // Orca: end of multipath average mm3_per_mm value calculation
@@ -7556,7 +7598,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                     } else if (sloped == nullptr) {
                         // Flow Weaving Z-modulation (logic in FlowWeavingZModulator.hpp)
-                        if (fw_z_active) {
+                        // Skip Z-mod for sub-paths tagged as outside the safe zone
+                        if (fw_z_active && !path.fw_z_flat) {
                             double z     = m_fw_z_mod.compute_z(m_nominal_z, path_length, path.height,
                                                                 m_config.flow_weaving_z_amplitude.value,
                                                                 m_config.flow_weaving_period.value, m_layer->id());

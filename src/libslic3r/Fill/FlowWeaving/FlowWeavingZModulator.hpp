@@ -63,7 +63,13 @@ public:
 
     // Reset cumulative distance — call at the start of each multi-path
     // (i.e. each infill line composed of width-modulated sub-segments).
-    void reset_path() { m_path_offset = 0.; }
+    void reset_path() { m_path_offset = 0.; m_total_path_length = 0.; }
+
+    // Set total length of the entire multi-path (infill line) — call once
+    // at the start of each multi-path, before any advance() or compute_z().
+    // Used for wall taper: near the line endpoints (walls), modulation
+    // amplitude fades to zero to prevent wall collision at modulated Z.
+    void set_total_path_length(double len) { m_total_path_length = len; }
 
     // Advance the cumulative offset after processing a sub-path.
     // `local_path_length` is the total length of lines within that sub-path.
@@ -71,11 +77,47 @@ public:
 
     // ── Object boundary ─────────────────────────────────────────────────
 
-    // Set the model's top Z — call once per object (e.g. from the last
-    // layer's print_z).  compute_z() uses this as the upward ceiling
-    // so material doesn't protrude above the top face.
+    // Set the local Z ceiling — the Z of the nearest solid/top surface
+    // layer above this infill region (e.g. Benchy deck at Z≈48mm, not
+    // the chimney top at Z≈60mm).  compute_z() uses this as the upward
+    // ceiling so material doesn't protrude through intermediate top faces.
     // Pass 0 or negative to disable the ceiling.
     void set_top_z(double top_z) { m_top_z = top_z; }
+
+    // Set the local Z floor — the Z of the nearest solid/bottom surface
+    // layer below this infill region.
+    void set_floor_z(double floor_z) { m_floor_z = floor_z; }
+
+    // ── Wall taper factor ────────────────────────────────────────────────
+    //
+    // Returns a factor in [0, 1] that fades modulation near the endpoints
+    // of an infill line where it touches the perimeter wall.
+    //
+    //   taper_distance — distance over which modulation fades (mm)
+    //   dist           — current position along the FULL multi-path (mm)
+    //
+    // At the wall (dist=0 or dist=total_length): factor = 0 (flat)
+    // Beyond taper_distance from wall:          factor = 1 (full modulation)
+    //
+    // The taper_distance for Z = z_deflection = z_amplitude/100 * layer_height
+    // The taper_distance for XY = peak_extra_half_width = base_w * amplitude / 2
+    //
+    // This is also exposed publicly for use by FillFlowWeaving (XY taper).
+    inline double compute_taper(double dist, double taper_distance) const
+    {
+        if (m_total_path_length <= 0. || taper_distance <= 0.)
+            return 1.0;
+        double dist_from_start = dist;
+        double dist_from_end   = m_total_path_length - dist;
+        double dist_from_wall  = std::min(dist_from_start, dist_from_end);
+        if (dist_from_wall >= taper_distance)
+            return 1.0;
+        if (dist_from_wall <= 0.)
+            return 0.0;
+        // Smooth taper using sin²  (0 → 1 over taper distance)
+        double ratio = dist_from_wall / taper_distance;
+        return ratio * ratio * (3.0 - 2.0 * ratio); // smoothstep
+    }
 
     // ── Z computation (uses internal state) ──────────────────────────────
     //
@@ -89,12 +131,9 @@ public:
     // The effective distance along the wave is m_path_offset + local_path_length,
     // giving a continuous sine wave across all sub-paths of a multi-path.
     //
-    // The full user-requested amplitude is always applied.
-    // The only safety limits are absolute physical boundaries:
-    //   - bottom: Z never drops below kMinZ (0.05 mm) — bed/nozzle protection
-    //   - top:    Z never exceeds m_top_z — model top face protection
-    // No amplitude pre-reduction — the user controls how deep into adjacent
-    // layers the wave penetrates via the z_amplitude percentage.
+    // Near the endpoints (walls), amplitude tapers to zero via smoothstep
+    // to prevent the nozzle from visiting Z-levels where it would be
+    // outside the perimeter wall.
     inline double compute_z(
         double nominal_z,
         double local_path_length,
@@ -111,12 +150,26 @@ public:
         // Full desired deflection (no pre-reduction)
         const double desired = amp * layer_height;
 
+        // Wall taper: fade modulation near line endpoints (walls).
+        // The 3× multiplier accounts for angled walls: on a wall at angle θ
+        // from vertical, the wall shifts inward by z_deflection × tan(θ).
+        // Factor 3 covers walls up to ~72° from vertical (tan⁻¹(3) ≈ 72°),
+        // handling virtually all FDM geometries.
+        static constexpr double kWallAngleFactor = 3.0;
+        double z_taper_dist = desired * kWallAngleFactor;
+        // Don't let taper exceed half the line length (leave some modulation)
+        if (m_total_path_length > 0.)
+            z_taper_dist = std::min(z_taper_dist, m_total_path_length * 0.45);
+        const double taper = compute_taper(dist, z_taper_dist);
+
         const double phase = M_PI * (layer_id % 2);           // 0 or π
         const double t     = std::sin(2.0 * M_PI * dist / period + phase);
-        double z = nominal_z + desired * t;
+        double z = nominal_z + desired * taper * t;
 
-        // Safety clamp: protect bed (bottom face) and model top (top face)
-        if (z < kMinZ)
+        // Safety clamp: protect floor (bottom solid surface) and ceiling (top solid surface)
+        if (m_floor_z > 0. && z < m_floor_z)
+            z = m_floor_z;
+        else if (z < kMinZ)
             z = kMinZ;
         if (m_top_z > 0. && z > m_top_z)
             z = m_top_z;
@@ -138,8 +191,10 @@ public:
     }
 
 private:
-    double m_path_offset = 0.;
-    double m_top_z       = 0.;   // model top face Z; 0 = no ceiling
+    double m_path_offset       = 0.;
+    double m_total_path_length = 0.;  // total length of current infill line
+    double m_top_z             = 0.;  // local ceiling Z (nearest top surface above); 0 = no ceiling
+    double m_floor_z           = 0.;  // local floor Z (nearest bottom surface below); 0 = use kMinZ
 };
 
 } // namespace Slic3r

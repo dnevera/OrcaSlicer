@@ -144,6 +144,18 @@ public:
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;
+    // Flow Weaving: safe zone — intersection of fill_no_overlap_expolygons
+    // across all layers in the Z-modulation range.  Sub-segments inside this
+    // zone get full modulation; those outside taper to nominal.
+    ExPolygons  fw_safe_expolygons;
+    // Flow Weaving: local Z ceiling and floor for this infill region.
+    // ceiling = Z of the nearest solid/top surface layer ABOVE (e.g. deck of Benchy)
+    // floor   = Z of the nearest solid/bottom surface layer BELOW
+    // These are per-region, not per-object — prevents infill from modulating
+    // through top/bottom surfaces that are intermediate (not model extremes).
+    // 0 = not computed (fallback to global top_z/kMinZ).
+    double      fw_ceiling_z = 0.;
+    double      fw_floor_z   = 0.;
     bool dont_alternate_fill_direction = false;
 
     static float infill_anchor;
