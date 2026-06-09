@@ -89,12 +89,12 @@ public:
     // The effective distance along the wave is m_path_offset + local_path_length,
     // giving a continuous sine wave across all sub-paths of a multi-path.
     //
-    // Amplitude is adaptively reduced near boundaries:
-    //   - downward: limited so Z never drops below kMinZ (0.05 mm) — bed
-    //   - upward:   limited so Z never exceeds m_top_z — model top face
-    // On middle layers both headrooms are large, so full amplitude is used.
-    // Interlocking into ADJACENT layers is preserved — only the absolute
-    // model boundaries are enforced.
+    // The full user-requested amplitude is always applied.
+    // The only safety limits are absolute physical boundaries:
+    //   - bottom: Z never drops below kMinZ (0.05 mm) — bed/nozzle protection
+    //   - top:    Z never exceeds m_top_z — model top face protection
+    // No amplitude pre-reduction — the user controls how deep into adjacent
+    // layers the wave penetrates via the z_amplitude percentage.
     inline double compute_z(
         double nominal_z,
         double local_path_length,
@@ -108,32 +108,18 @@ public:
         const double dist  = m_path_offset + local_path_length;
         const double amp   = z_amplitude / 100.0;             // % → fraction
 
-        // Desired deflection magnitude (symmetric ±)
-        double desired = amp * layer_height;
-
-        // Available headroom in each direction
-        const double room_down = nominal_z - kMinZ;           // first layer bottleneck
-        const double room_up   = (m_top_z > 0.)
-                                     ? (m_top_z - nominal_z)  // last layers near top
-                                     : desired;               // no ceiling set → unlimited
-
-        // Effective deflection: scale symmetrically to the tighter constraint
-        // so the sine wave stays smooth (no mid-wave discontinuities).
-        double effective = desired;
-        if (effective > room_down)
-            effective = room_down;
-        if (effective > room_up)
-            effective = room_up;
-        if (effective < 0.)
-            effective = 0.;
+        // Full desired deflection (no pre-reduction)
+        const double desired = amp * layer_height;
 
         const double phase = M_PI * (layer_id % 2);           // 0 or π
         const double t     = std::sin(2.0 * M_PI * dist / period + phase);
-        double z = nominal_z + effective * t;
+        double z = nominal_z + desired * t;
 
-        // Final safety clamp (belt-and-suspenders for numerical edge cases)
+        // Safety clamp: protect bed (bottom face) and model top (top face)
         if (z < kMinZ)
             z = kMinZ;
+        if (m_top_z > 0. && z > m_top_z)
+            z = m_top_z;
         return z;
     }
 

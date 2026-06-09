@@ -7513,7 +7513,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             }
             // BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode or we are doing sloped extrusion
             // Attention: G2 and G3 is not supported in spiral_mode mode
-            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || path.z_contoured) {
+            // Flow Weaving: G2/G3 arcs cannot represent sinusoidal Z — force G1 when FW Z-mod is active
+            const bool fw_z_active = m_fw_z_mod.is_active(m_config.sparse_infill_pattern.value, m_config.flow_weaving_z_amplitude.value, m_layer, path.role());
+            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || path.z_contoured || fw_z_active) {
                 double path_length = 0.;
                 double total_length = sloped == nullptr ? 0. : path.polyline.length() * SCALING_FACTOR;
                 double saved_z      = m_writer.get_position().z();
@@ -7554,8 +7556,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                     } else if (sloped == nullptr) {
                         // Flow Weaving Z-modulation (logic in FlowWeavingZModulator.hpp)
-                        if (m_fw_z_mod.is_active(m_config.sparse_infill_pattern.value, m_config.flow_weaving_z_amplitude.value, m_layer,
-                                                 path.role())) {
+                        if (fw_z_active) {
                             double z     = m_fw_z_mod.compute_z(m_nominal_z, path_length, path.height,
                                                                 m_config.flow_weaving_z_amplitude.value,
                                                                 m_config.flow_weaving_period.value, m_layer->id());

@@ -144,6 +144,9 @@ void FillFlowWeaving::fill_surface_extrusion(
                 //     factor ∈ [0.85, 1.15], avg = 1.0
                 double amplitude = (fw_wratio - 1.0) / 2.0;
                 double factor = 1.0 + amplitude * t;
+                // Clamp factor to prevent negative/zero widths at extreme amplitudes
+                if (factor < 0.1)
+                    factor = 0.1;
                 double sub_mm3 = base_mm3 * factor;
                 float  sub_w   = base_w * (float)factor;
 
