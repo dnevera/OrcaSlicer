@@ -7658,11 +7658,13 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                             // This matches how z_contoured (non-planar ZAA) works —
                             // it applies z_diff unconditionally within the model.
                             {
-                                const int z_tol       = (int) m_config.flow_weaving_z_flow_tolerance.value;
+                                const int    z_tol    = (int) m_config.flow_weaving_z_flow_tolerance.value;
                                 const double lh       = m_layer->height;
                                 const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
-                                // Check if a layer has an external (top/bottom) surface
+                                // A layer is a solid external boundary when it has top or bottom surfaces.
+                                // Internal fills (stInternal, stInternalSolid, etc.) must NOT
+                                // restrict Z-modulation — only the real model surface counts.
                                 auto layer_has_external_surface = [](const Layer* l) -> bool {
                                     for (const LayerRegion* r : l->regions())
                                         for (const Surface& s : r->fill_surfaces.surfaces)
@@ -7674,21 +7676,24 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                 double deflection = z - m_nominal_z; // signed
 
                                 if (deflection > 0.) {
-                                    // Going UP: find the first external surface layer
-                                    double dist_up     = 0.;
+                                    // Going UP: walk to first external-surface layer.
+                                    // Accumulate height BEFORE the boundary test so that
+                                    // dist_up reflects the bottom of the boundary layer, not 0.
                                     const Layer* check = m_layer->upper_layer;
                                     while (check) {
-                                        if (layer_has_external_surface(check)) {
-                                            // Found top/bottom surface — this is the boundary
+                                        if (layer_has_external_surface(check))
                                             break;
-                                        }
-                                        dist_up += check->height;
                                         check = check->upper_layer;
                                     }
                                     if (check) {
-                                        // External surface found at dist_up above
-                                        double boundary_z = m_nominal_z + dist_up;
+                                        // check->print_z is the top of that layer.
+                                        // We clamp to the BOTTOM of the boundary layer
+                                        // = check->print_z - check->height.
+                                        // That way the nozzle never enters the solid shell.
+                                        const double boundary_z = check->print_z - check->height;
+                                        const double dist_up    = boundary_z - m_nominal_z;
                                         if (dist_up <= 0.) {
+                                            // Boundary is at or below us — no room to go up
                                             z = m_nominal_z;
                                         } else {
                                             if (tol_zone > 0. && dist_up < tol_zone) {
@@ -7699,21 +7704,19 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                                 z = boundary_z;
                                         }
                                     }
-                                    // If no external surface found (check == null),
-                                    // model has no top — no clamping needed.
+                                    // check == null: no top boundary — no clamping.
                                 } else if (deflection < 0.) {
-                                    // Going DOWN: find the first external surface layer
-                                    double dist_down   = 0.;
+                                    // Going DOWN: walk to first external-surface layer.
                                     const Layer* check = m_layer->lower_layer;
                                     while (check) {
-                                        if (layer_has_external_surface(check)) {
+                                        if (layer_has_external_surface(check))
                                             break;
-                                        }
-                                        dist_down += check->height;
                                         check = check->lower_layer;
                                     }
                                     if (check) {
-                                        double boundary_z = m_nominal_z - dist_down;
+                                        // Clamp to the TOP of the boundary layer = check->print_z.
+                                        const double boundary_z  = check->print_z;
+                                        const double dist_down   = m_nominal_z - boundary_z;
                                         if (dist_down <= 0.) {
                                             z = m_nominal_z;
                                         } else {
@@ -7725,8 +7728,9 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                                 z = boundary_z;
                                         }
                                     }
+                                    // check == null: no bottom boundary — floor only.
                                 }
-                                // Absolute floor safety: never below first layer
+                                // Absolute floor: never below first layer
                                 if (z < m_config.initial_layer_print_height.value)
                                     z = m_config.initial_layer_print_height.value;
                             }
