@@ -140,7 +140,7 @@ public:
         double layer_height,
         double z_amplitude,
         double period,
-        int    layer_id) const
+        int    phase_idx) const
     {
         static constexpr double kMinZ = 0.05;   // absolute Z floor (mm)
 
@@ -162,7 +162,9 @@ public:
             z_taper_dist = std::min(z_taper_dist, m_total_path_length * 0.45);
         const double taper = compute_taper(dist, z_taper_dist);
 
-        const double phase = M_PI * (layer_id % 2);           // 0 or π
+        // Phase alternation: caller supplies a sequential FW index
+        // (not raw layer_id, which breaks with combine_infill).
+        const double phase = M_PI * (phase_idx % 2);          // 0 or π
         const double t     = std::sin(2.0 * M_PI * dist / period + phase);
         double z = nominal_z + desired * taper * t;
 

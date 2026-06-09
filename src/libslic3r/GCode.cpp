@@ -7600,9 +7600,68 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                         // Flow Weaving Z-modulation (logic in FlowWeavingZModulator.hpp)
                         // Skip Z-mod for sub-paths tagged as outside the safe zone
                         if (fw_z_active && !path.fw_z_flat) {
-                            double z     = m_fw_z_mod.compute_z(m_nominal_z, path_length, path.height,
+                            // Use m_layer->height (single layer height), NOT path.height
+                            // (which may be combined_infill height = 2× layer_height).
+                            // Phase: detect combine_infill from path.height/layer_height ratio
+                            // (infill_combination is in PrintRegionConfig, not GCodeConfig).
+                            int combine_step = (path.height > m_layer->height * 1.5) ?
+                                (int)std::round(path.height / m_layer->height) : 1;
+                            int fw_phase_idx = m_layer->id() / combine_step;
+                            double z     = m_fw_z_mod.compute_z(m_nominal_z, path_length, m_layer->height,
                                                                 m_config.flow_weaving_z_amplitude.value,
-                                                                m_config.flow_weaving_period.value, m_layer->id());
+                                                                m_config.flow_weaving_period.value, fw_phase_idx);
+
+                            // ── Model-aware Z clamping ──────────────────────────
+                            // On sloped surfaces (e.g. Benchy hull), the ceiling
+                            // varies per XY position. Walk up/down through layers
+                            // and check if this XY point is still inside the model
+                            // (lslices) at the modulated Z. Clamp to the last
+                            // layer whose cross-section contains the point.
+                            {
+                                const Point xy_pt = line.b.to_point();
+                                if (z > m_nominal_z) {
+                                    // Going UP: walk upper layers until z < layer->print_z
+                                    const Layer *check = m_layer->upper_layer;
+                                    while (check && z > check->print_z - check->height * 0.5) {
+                                        // Check if XY point is inside model at this layer
+                                        bool inside = false;
+                                        for (size_t i = 0; i < check->lslices.size(); ++i) {
+                                            if (check->lslices_bboxes[i].contains(xy_pt) &&
+                                                check->lslices[i].contour.contains(xy_pt)) {
+                                                inside = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!inside) {
+                                            // Point is outside model at this layer → clamp
+                                            z = check->print_z - check->height;
+                                            break;
+                                        }
+                                        check = check->upper_layer;
+                                    }
+                                } else if (z < m_nominal_z) {
+                                    // Going DOWN: walk lower layers
+                                    const Layer *check = m_layer->lower_layer;
+                                    while (check && z < check->print_z + check->height * 0.5) {
+                                        bool inside = false;
+                                        for (size_t i = 0; i < check->lslices.size(); ++i) {
+                                            if (check->lslices_bboxes[i].contains(xy_pt) &&
+                                                check->lslices[i].contour.contains(xy_pt)) {
+                                                inside = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!inside) {
+                                            z = check->print_z;
+                                            break;
+                                        }
+                                        check = check->lower_layer;
+                                    }
+                                }
+                                // Absolute floor safety
+                                if (z < 0.05) z = 0.05;
+                            }
+
                             Vec2d dest2d = this->point_to_gcode(line.b.to_point());
                             gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), z), dE,
                                                              GCodeWriter::full_gcode_comment ? tempDescription : "");

@@ -92,10 +92,14 @@ void FillFlowWeaving::fill_surface_extrusion(
     float  base_h   = base_flow.height();       // layer height
 
     // ── Step 4: Phase alternation ────────────────────────────────────────
-    // Even layers: phase = 0   → sin starts at 0, peaks first
-    // Odd  layers: phase = π   → sin starts at 0, troughs first
-    // This ensures adjacent layers interlock (peak ↔ trough alignment).
-    double phase = M_PI * (this->layer_id % 2);
+    // Adjacent FW layers must alternate phase (0 vs π) for interlocking.
+    // Using layer_id % 2 BREAKS with combine_infill: when infill is printed
+    // every 2nd layer, all infill layer_ids are odd → same phase → no interlock.
+    // Fix: divide layer_id by the combine step to get a sequential index.
+    // Without combine_infill, combine_step = 1 → identical to layer_id % 2.
+    int combine_step = (params.config && params.config->infill_combination.value) ? 2 : 1;
+    int fw_phase_idx = this->layer_id / combine_step;
+    double phase = M_PI * (fw_phase_idx % 2);
 
     // ── Step 5: Sub-segmentation ─────────────────────────────────────────
     // Each infill line is split into sub-segments of ~period/8 length.
