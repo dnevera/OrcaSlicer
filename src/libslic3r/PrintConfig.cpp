@@ -4625,23 +4625,23 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1.0));
 
-    def           = this->add("flow_weaving_z_top_offset", coInt);
-    def->label    = L("Z top offset");
+    def           = this->add("flow_weaving_z_flow_tolerance", coInt);
+    def->label    = L("Z flow tolerance");
     def->category = L("Strength");
-    def->tooltip  = L("Safety margin near top/bottom surfaces, measured in "
-                       "layers.\n\n"
-                       "On sloped surfaces (like the Benchy hull), the "
-                       "boundary between infill and solid zones is close "
-                       "to the current layer. Without a margin, Z modulation "
-                       "can poke through the surface causing bumps.\n\n"
-                       "This parameter pulls back the maximum Z modulation "
-                       "by N × layer_height from the nearest solid boundary.\n\n"
-                       "• 0: no margin (may cause artifacts on slopes)\n"
-                       "• 1: one layer safety margin (recommended)\n"
-                       "• 2-3: for very steep slopes or thin walls");
+    def->tooltip  = L("Number of tolerance layers used in the adaptive "
+                       "Z-modulation scaling algorithm.\n\n"
+                       "When the nozzle approaches a solid boundary "
+                       "(top/bottom surface, slope), the algorithm reduces "
+                       "Z deflection proportionally to the available headroom. "
+                       "This parameter adds an extra safety buffer of N layers "
+                       "from the geometric boundary.\n\n"
+                       "• 0: no extra tolerance (modulation fades right at "
+                       "the boundary)\n"
+                       "• 1: one layer buffer (recommended)\n"
+                       "• 2-3: for steep slopes or thin walls");
     def->sidetext = L("layers");
     def->min      = 0;
-    def->max      = 10;
+    def->max      = 20;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 

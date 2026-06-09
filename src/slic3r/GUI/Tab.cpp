@@ -2509,7 +2509,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("flow_weaving_z_amplitude");
         optgroup->append_single_option_line("flow_weaving_xy_amplitude");
         optgroup->append_single_option_line("flow_weaving_period");
-        optgroup->append_single_option_line("flow_weaving_z_top_offset");
+        optgroup->append_single_option_line("flow_weaving_z_flow_tolerance");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");

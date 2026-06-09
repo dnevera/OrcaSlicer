@@ -7650,20 +7650,22 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                                                     m_config.flow_weaving_z_amplitude.value, m_config.flow_weaving_period.value,
                                                                     fw_phase_idx);
 
-                            // ── Inner-perimeter Z clamping ───────────────────────
-                            // For each point, check if the XY position is inside
-                            // the fill_no_overlap_expolygons (inner perimeter
-                            // boundary) at the layer corresponding to the
-                            // modulated Z.  This handles ALL boundary types:
-                            //   • horizontal top/bottom surfaces (e.g. Benchy deck)
-                            //   • sloped/angled walls (inner perimeter shifts)
-                            //   • model edges
-                            // Z top offset extends the check by N extra layers
-                            // beyond the modulated Z for additional safety margin.
-                            // The check is per-point: no XY-size dependency.
+                            // ── Adaptive Z clamping ──────────────────────────────
+                            // 1. Walk ALL layers up/down to find the first layer
+                            //    where the XY point exits fill_no_overlap_expolygons.
+                            //    That is the geometric boundary of the model.
+                            // 2. z_flow_tolerance (from flow_weaving_z_flow_tolerance)
+                            //    specifies extra tolerance layers from the boundary.
+                            //    hard_limit = boundary_z - tolerance * layer_height.
+                            // 3. Adaptive: instead of hard clamp, smoothly scale the
+                            //    Z deflection proportionally to available headroom.
+                            //    Far from surfaces → full amplitude.
+                            //    Near surfaces → amplitude reduces to zero.
                             {
                                 const Point xy_pt = line.b.to_point();
-                                const int z_top_offset = (int)m_config.flow_weaving_z_top_offset.value;
+                                const int z_tol = (int)m_config.flow_weaving_z_flow_tolerance.value;
+                                const double lh = m_layer->height;
+                                const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
                                 // Check if xy_pt is inside the fill region of layer l
                                 auto point_in_fill_region = [&xy_pt](const Layer* l) -> bool {
@@ -7674,74 +7676,71 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                     return false;
                                 };
 
-                                if (z > m_nominal_z) {
-                                    // Going UP: walk upper layers until we find one
-                                    // where the point is outside the fill region
+                                double deflection = z - m_nominal_z; // signed
+
+                                if (deflection > 0.) {
+                                    // Going UP: find the ceiling boundary
+                                    double boundary_z = 0.;
+                                    bool found = false;
                                     const Layer* check = m_layer->upper_layer;
-                                    while (check && z >= check->bottom_z()) {
+                                    while (check) {
                                         if (!point_in_fill_region(check)) {
-                                            // Point exits inner perimeter at this layer
-                                            z = std::min(z, check->bottom_z());
-                                            if (z < m_nominal_z)
-                                                z = m_nominal_z;
+                                            boundary_z = check->bottom_z();
+                                            found = true;
                                             break;
                                         }
                                         check = check->upper_layer;
                                     }
-                                    // Z top offset: even if we didn't clamp yet,
-                                    // check N additional layers above modulated Z
-                                    if (z_top_offset > 0 && z > m_nominal_z) {
-                                        const Layer* extra = m_layer->upper_layer;
-                                        int layers_above = 0;
-                                        while (extra) {
-                                            if (extra->bottom_z() > z) {
-                                                // This layer is above modulated Z
-                                                ++layers_above;
-                                                if (layers_above <= z_top_offset) {
-                                                    if (!point_in_fill_region(extra)) {
-                                                        z = std::min(z, extra->bottom_z() - m_layer->height * layers_above);
-                                                        if (z < m_nominal_z)
-                                                            z = m_nominal_z;
-                                                        break;
-                                                    }
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            extra = extra->upper_layer;
+                                    if (found) {
+                                        // Distance from current nominal Z to the
+                                        // geometric boundary (where fill ends).
+                                        double dist = boundary_z - m_nominal_z;
+                                        if (dist <= 0.) {
+                                            // Already at or above the boundary
+                                            z = m_nominal_z;
+                                        } else if (dist <= deflection) {
+                                            // Hard clamp: deflection would exceed
+                                            // the actual geometric boundary
+                                            z = m_nominal_z;
+                                        } else if (tol_zone > 0. && dist < tol_zone) {
+                                            // Inside the tolerance fade-out zone:
+                                            // scale deflection from 0 (at boundary)
+                                            // to full (at tol_zone distance away).
+                                            // This is amplitude-independent and
+                                            // gives the same fade behaviour at
+                                            // 50% as at 500%.
+                                            double scale = dist / tol_zone;
+                                            z = m_nominal_z + deflection * scale;
+                                            // Extra safety: never exceed the boundary
+                                            if (z > boundary_z)
+                                                z = boundary_z;
                                         }
+                                        // else: outside tolerance zone — full amplitude OK
                                     }
-                                } else if (z < m_nominal_z) {
-                                    // Going DOWN: walk lower layers
+                                } else if (deflection < 0.) {
+                                    // Going DOWN: find the floor boundary
+                                    double boundary_z = 0.;
+                                    bool found = false;
                                     const Layer* check = m_layer->lower_layer;
-                                    while (check && z <= check->print_z) {
+                                    while (check) {
                                         if (!point_in_fill_region(check)) {
-                                            z = std::max(z, check->print_z);
-                                            if (z > m_nominal_z)
-                                                z = m_nominal_z;
+                                            boundary_z = check->print_z;
+                                            found = true;
                                             break;
                                         }
                                         check = check->lower_layer;
                                     }
-                                    // Z top offset: check N additional layers below
-                                    if (z_top_offset > 0 && z < m_nominal_z) {
-                                        const Layer* extra = m_layer->lower_layer;
-                                        int layers_below = 0;
-                                        while (extra) {
-                                            if (extra->print_z < z) {
-                                                ++layers_below;
-                                                if (layers_below <= z_top_offset) {
-                                                    if (!point_in_fill_region(extra)) {
-                                                        z = std::max(z, extra->print_z + m_layer->height * layers_below);
-                                                        if (z > m_nominal_z)
-                                                            z = m_nominal_z;
-                                                        break;
-                                                    }
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            extra = extra->lower_layer;
+                                    if (found) {
+                                        double dist = m_nominal_z - boundary_z;
+                                        if (dist <= 0.) {
+                                            z = m_nominal_z;
+                                        } else if (dist <= -deflection) {
+                                            z = m_nominal_z;
+                                        } else if (tol_zone > 0. && dist < tol_zone) {
+                                            double scale = dist / tol_zone;
+                                            z = m_nominal_z + deflection * scale;
+                                            if (z < boundary_z)
+                                                z = boundary_z;
                                         }
                                     }
                                 }
