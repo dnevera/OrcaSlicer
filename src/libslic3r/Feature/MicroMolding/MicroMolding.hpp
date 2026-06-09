@@ -38,6 +38,13 @@ public:
         int                nozzle_temperature,
         bool               use_relative_e,
         const Vec2d       &copy_offset);
+
+    // Phase 4: Post-injection nozzle cleaning.
+    // Generates G-code for retract → travel to wipe tower → purge → wipe.
+    static std::string generate_post_injection_cleanup(
+        double print_z,
+        double wipe_tower_x,
+        double wipe_tower_y);
 };
 
 } // namespace Slic3r

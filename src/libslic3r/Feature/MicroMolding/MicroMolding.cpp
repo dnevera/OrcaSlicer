@@ -464,4 +464,44 @@ std::string MicroMolding::generate_injection_gcode(
     return gcode.str();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4: generate_post_injection_cleanup
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// After injection, travel to the wipe tower, purge residual over-pressure
+// material and wipe the nozzle to prevent contamination of the next extrusion.
+//
+// Sequence: retract → Z-lift → travel to tower → lower → de-retract + purge
+//           → wipe moves → retract → comment
+
+std::string MicroMolding::generate_post_injection_cleanup(
+    double print_z,
+    double wipe_tower_x,
+    double wipe_tower_y)
+{
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3);
+
+    out << "; Micro-molding: nozzle cleaning at wipe tower\n";
+    // Retract before travel
+    out << "G1 E-0.800 F1800 ; Retract for travel to tower\n";
+    // Lift Z to clear the model
+    out << "G1 Z" << (print_z + 2.0) << " F1200 ; Lift Z for travel\n";
+    // Travel to wipe tower
+    out << "G1 X" << wipe_tower_x << " Y" << wipe_tower_y << " F9000 ; Travel to wipe tower\n";
+    // Lower to print Z
+    out << "G1 Z" << print_z << " F1200 ; Lower to print Z\n";
+    // De-retract + purge a small amount to clean nozzle
+    out << "G1 E1.500 F300 ; De-retract + purge nozzle\n";
+    // Small wipe moves on the tower
+    out << "G1 X" << (wipe_tower_x + 10.0) << " Y" << wipe_tower_y << " F1500 ; Wipe on tower\n";
+    out << "G1 X" << (wipe_tower_x + 10.0) << " Y" << (wipe_tower_y + 2.0) << " F1500 ; Wipe on tower\n";
+    // Retract after purge
+    out << "G1 E-0.800 F1800 ; Retract after purge\n";
+    out << "; End nozzle cleaning\n";
+
+    return out.str();
+}
+
 } // namespace Slic3r
+
