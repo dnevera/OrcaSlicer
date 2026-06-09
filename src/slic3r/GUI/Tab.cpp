@@ -2510,7 +2510,7 @@ void TabPrint::build()
     optgroup->append_single_option_line("filter_out_gap_fill", "strength_settings_infill#filter-out-tiny-gaps");
     optgroup->append_single_option_line("infill_wall_overlap", "strength_settings_infill#infill-wall-overlap");
 
-    optgroup = page->new_optgroup(L("Flow weaving"), L"param_advanced");
+    optgroup = page->new_optgroup(L("Flow weaving"), L"param_flowweaving_group");
     optgroup->append_single_option_line("flow_weaving_z_amplitude");
     optgroup->append_single_option_line("flow_weaving_xy_amplitude");
     optgroup->append_single_option_line("flow_weaving_period");
@@ -2529,7 +2529,7 @@ void TabPrint::build()
                                         "strength_settings_advanced#detect-narrow-internal-solid-infill");
     optgroup->append_single_option_line("ensure_vertical_shell_thickness", "strength_settings_advanced#ensure-vertical-shell-thickness");
 
-    optgroup = page->new_optgroup(L("Micro-injection molding"), L"param_advanced");
+    optgroup = page->new_optgroup(L("Micro-injection molding"), L"param_micromolding_group");
     optgroup->append_single_option_line("micro_molding");
     optgroup->append_single_option_line("micro_molding_cavity_diameter");
     optgroup->append_single_option_line("micro_molding_layers_span");
@@ -2959,6 +2959,17 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation           = nullptr;
+}
+
+void TabPrint::update_custom_dirty(std::vector<std::string>& dirty_options, std::vector<std::string>& nonsys_options)
+{
+    // When Flow Weaving is active, density is forced to 100% for display.
+    // Don't mark it as dirty (no orange text, no reset arrow).
+    if (m_config->opt_enum<InfillPattern>("sparse_infill_pattern") == ipFlowWeaving) {
+        const std::string key = "sparse_infill_density";
+        dirty_options.erase(std::remove(dirty_options.begin(), dirty_options.end(), key), dirty_options.end());
+        nonsys_options.erase(std::remove(nonsys_options.begin(), nonsys_options.end(), key), nonsys_options.end());
+    }
 }
 
 // BBS: GUI refactor

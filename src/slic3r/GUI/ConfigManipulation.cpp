@@ -852,12 +852,27 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
                     "micro_molding_head_layers"})
         toggle_line(el, has_micro_molding);
 
-    // Flow Weaving: force 100% density and toggle parameter visibility
+    // Flow Weaving: show 100% (disabled) in the density field.
+    // FillFlowWeaving forces density=1.0 at slice time; here we update the UI
+    // to reflect that. Dirty flag is suppressed in TabPrint::update_custom_dirty.
     bool is_flow_weaving = pattern == ipFlowWeaving;
-    if (is_flow_weaving) {
-        DynamicPrintConfig new_conf = *config;
-        new_conf.set_key_value("sparse_infill_density", new ConfigOptionPercent(100));
-        apply(config, &new_conf);
+    {
+        static double saved_density = -1.0; // -1 = nothing saved
+        double current_density = config->option<ConfigOptionPercent>("sparse_infill_density")->value;
+
+        if (is_flow_weaving && saved_density < 0.0 && current_density != 100.0) {
+            // Entering FW: save current density, display 100%
+            saved_density = current_density;
+            DynamicPrintConfig new_conf = *config;
+            new_conf.set_key_value("sparse_infill_density", new ConfigOptionPercent(100));
+            apply(config, &new_conf);
+        } else if (!is_flow_weaving && saved_density >= 0.0) {
+            // Leaving FW: restore original density
+            DynamicPrintConfig new_conf = *config;
+            new_conf.set_key_value("sparse_infill_density", new ConfigOptionPercent(saved_density));
+            apply(config, &new_conf);
+            saved_density = -1.0;
+        }
     }
     toggle_field("sparse_infill_density", !is_flow_weaving);
     for (auto el : {"flow_weaving_z_amplitude", "flow_weaving_xy_amplitude",

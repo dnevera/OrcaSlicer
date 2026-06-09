@@ -133,11 +133,17 @@ void FillFlowWeaving::fill_surface_extrusion(
                 double pos = accumulated + sub_len * (s + 0.5);
                 double t = std::sin(2.0 * M_PI * pos / fw_period + phase);
 
-                // Width modulation factor:
-                //   t ∈ [-1,+1] → factor ∈ [1.0, wratio]
-                //   at t=-1: factor = 1.0      (nominal width)
-                //   at t=+1: factor = wratio   (e.g. 1.15 for 15%)
-                double factor = 1.0 + (fw_wratio - 1.0) * (t + 1.0) / 2.0;
+                // Width modulation factor (symmetric around 1.0):
+                //   amplitude = (wratio - 1.0) / 2.0
+                //   factor = 1.0 + amplitude × sin(θ)
+                //
+                //   t ∈ [-1,+1] → factor ∈ [1-amp, 1+amp]
+                //   Average factor = 1.0 → no net over/under-extrusion
+                //
+                //   Example: wratio=1.30 (15%) → amp=0.15
+                //     factor ∈ [0.85, 1.15], avg = 1.0
+                double amplitude = (fw_wratio - 1.0) / 2.0;
+                double factor = 1.0 + amplitude * t;
                 double sub_mm3 = base_mm3 * factor;
                 float  sub_w   = base_w * (float)factor;
 
