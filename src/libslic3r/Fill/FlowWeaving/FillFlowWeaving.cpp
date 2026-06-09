@@ -23,6 +23,7 @@
 #include "../FillRectilinear.hpp"
 #include "../../PrintConfig.hpp"
 #include "../../ExtrusionEntity.hpp"
+#include "../../ClipperUtils.hpp"
 
 #include <cmath>
 
@@ -199,9 +200,6 @@ void FillFlowWeaving::fill_surface_extrusion(
 
                 ExtrusionPath path(params.extrusion_role, sub_mm3, sub_w, base_h);
                 path.polyline.points = { Point3(sub_a, 0), Point3(sub_b, 0) };
-                // Tag sub-paths outside the safe zone for Z-modulation suppression
-                if (have_safe_zone && taper == 0.0)
-                    path.fw_z_flat = true;
                 mp->paths.push_back(std::move(path));
             }
             accumulated += seg_len;

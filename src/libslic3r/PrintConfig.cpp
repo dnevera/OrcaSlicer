@@ -4573,8 +4573,17 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("flow_weaving_z_amplitude", coFloat);
     def->label    = L("Z amplitude");
     def->category = L("Strength");
-    def->tooltip  = L("Amplitude of Z-height modulation as percentage of layer height. "
-                       "Higher values create deeper interlocking but may affect surface quality.");
+    def->tooltip  = L("How far the nozzle moves up and down during infill, "
+                       "as a percentage of the layer height.\n\n"
+                       "This creates a wavy Z-profile that mechanically "
+                       "interlocks adjacent layers, significantly improving "
+                       "Z-axis (vertical) strength.\n\n"
+                       "• 30-50%: gentle interlocking, minimal surface impact\n"
+                       "• 50-80%: strong interlocking (recommended)\n"
+                       "• >80%: very aggressive, may cause artifacts near "
+                       "top/bottom surfaces\n\n"
+                       "Only applies to sparse infill paths. Walls, top/bottom "
+                       "surfaces, and bridges are never modulated.");
     def->sidetext = L("%");
     def->min      = 1;
     def->mode     = comExpert;
@@ -4583,9 +4592,16 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("flow_weaving_xy_amplitude", coFloat);
     def->label    = L("XY width amplitude");
     def->category = L("Strength");
-    def->tooltip  = L("Amplitude of extrusion width modulation as percentage of nominal width. "
-                       "15% means width varies from ~0.93x to ~1.15x nominal. "
-                       "Controls the in-plane interlocking depth. Set to 0 to disable XY modulation.");
+    def->tooltip  = L("How much the extrusion width varies along the path, "
+                       "as a percentage of the nominal width.\n\n"
+                       "Wider/narrower sections interlock with neighboring "
+                       "lines in the XY plane, improving horizontal shear "
+                       "strength between infill lines.\n\n"
+                       "• 30-50%: subtle width variation\n"
+                       "• 50-80%: noticeable interlocking (recommended)\n"
+                       "• >80%: aggressive, may cause over-extrusion buildup\n\n"
+                       "The total material volume is preserved — wider "
+                       "sections are compensated by narrower ones.");
     def->sidetext = L("%");
     def->min      = 1;
     def->mode     = comExpert;
@@ -4594,14 +4610,40 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("flow_weaving_period", coFloat);
     def->label    = L("Wave period");
     def->category = L("Strength");
-    def->tooltip  = L("Length of one complete wave cycle along the extrusion path. "
-                       "Shorter periods create denser interlocking. "
+    def->tooltip  = L("Length of one complete wave cycle along the extrusion "
+                       "path.\n\n"
+                       "Shorter periods create denser interlocking points "
+                       "but increase G-code size and may strain the motion "
+                       "system with rapid Z changes.\n\n"
+                       "• 0.5-1.0 mm: dense weave, maximum interlocking\n"
+                       "• 1.0-2.0 mm: balanced (recommended)\n"
+                       "• 2.0-5.0 mm: sparse, gentler on the printer\n\n"
                        "A good starting point is the nozzle diameter.");
     def->sidetext = L("mm");
     def->min      = 0.2;
     def->max      = 10.0;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1.0));
+
+    def           = this->add("flow_weaving_z_top_offset", coInt);
+    def->label    = L("Z top offset");
+    def->category = L("Strength");
+    def->tooltip  = L("Safety margin near top/bottom surfaces, measured in "
+                       "layers.\n\n"
+                       "On sloped surfaces (like the Benchy hull), the "
+                       "boundary between infill and solid zones is close "
+                       "to the current layer. Without a margin, Z modulation "
+                       "can poke through the surface causing bumps.\n\n"
+                       "This parameter pulls back the maximum Z modulation "
+                       "by N × layer_height from the nearest solid boundary.\n\n"
+                       "• 0: no margin (may cause artifacts on slopes)\n"
+                       "• 1: one layer safety margin (recommended)\n"
+                       "• 2-3: for very steep slopes or thin walls");
+    def->sidetext = L("layers");
+    def->min      = 0;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(1));
 
     def             = this->add("layer_change_gcode", coString);
     def->label      = L("Layer change G-code");
