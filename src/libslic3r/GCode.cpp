@@ -7658,7 +7658,7 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                             // This matches how z_contoured (non-planar ZAA) works —
                             // it applies z_diff unconditionally within the model.
                             {
-                                const int    z_tol    = (int) m_config.flow_weaving_z_flow_tolerance.value;
+                                const int z_tol       = (int) m_config.flow_weaving_z_flow_tolerance.value;
                                 const double lh       = m_layer->height;
                                 const double tol_zone = z_tol * lh; // tolerance distance (mm)
 
@@ -7686,14 +7686,14 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                         check = check->upper_layer;
                                     }
                                     if (check) {
-                                        // check->print_z is the top of that layer.
-                                        // We clamp to the BOTTOM of the boundary layer
-                                        // = check->print_z - check->height.
-                                        // That way the nozzle never enters the solid shell.
-                                        const double boundary_z = check->print_z - check->height;
+                                        // boundary_z = TOP of the first shell layer (check->print_z).
+                                        // The nozzle may enter the shell space from below but
+                                        // must not exit above it.  dist_up is therefore measured
+                                        // to the TOP of the shell, not its bottom, so that
+                                        // adjacent-layer shells don't collapse dist_up to 0.
+                                        const double boundary_z = check->print_z;
                                         const double dist_up    = boundary_z - m_nominal_z;
                                         if (dist_up <= 0.) {
-                                            // Boundary is at or below us — no room to go up
                                             z = m_nominal_z;
                                         } else {
                                             if (tol_zone > 0. && dist_up < tol_zone) {
@@ -7714,9 +7714,11 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                                         check = check->lower_layer;
                                     }
                                     if (check) {
-                                        // Clamp to the TOP of the boundary layer = check->print_z.
-                                        const double boundary_z  = check->print_z;
-                                        const double dist_down   = m_nominal_z - boundary_z;
+                                        // boundary_z = BOTTOM of the first shell layer below.
+                                        // The nozzle may enter the shell space from above but
+                                        // must not go below the shell's bottom face.
+                                        const double boundary_z = check->print_z - check->height;
+                                        const double dist_down  = m_nominal_z - boundary_z;
                                         if (dist_down <= 0.) {
                                             z = m_nominal_z;
                                         } else {
