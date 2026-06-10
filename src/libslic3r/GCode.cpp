@@ -17,6 +17,7 @@
 #include "ShortestPath.hpp"
 #include "Print.hpp"
 #include "Fill/FlowWeaving/FlowWeavingZModulator.hpp"
+#include "Fill/FlowWeaving/FlowWeavingFadeEnvelope.hpp"
 #include "Utils.hpp"
 #include "ClipperUtils.hpp"
 #include "libslic3r.h"
@@ -7644,102 +7645,75 @@ std::string GCode::_extrude(const ExtrusionPath& path, std::string description, 
                             // (infill_combination is in PrintRegionConfig, not GCodeConfig).
                             int combine_step = (path.height > m_layer->height * 1.5) ? (int) std::round(path.height / m_layer->height) : 1;
                             int fw_phase_idx = m_layer->id() / combine_step;
-                            double z         = m_fw_z_mod.compute_z(m_nominal_z, path_length, m_layer->height,
-                                                                    m_config.flow_weaving_z_amplitude.value, m_config.flow_weaving_period.value,
-                                                                    fw_phase_idx, m_config.initial_layer_print_height.value);
 
-                            // ── Adaptive Z clamping (layer-level) ───────────────
-                            // Walk layers up/down to find the nearest layer that
-                            // has an EXTERNAL surface (stTop / stBottom / stBottomBridge).
-                            // Only external surfaces represent the actual model
-                            // boundary.  Internal fills (stInternal, stInternalSolid,
-                            // stInternalVoid, stInternalBridge) are all INSIDE the
-                            // model and must NOT restrict Z-modulation.
-                            // This matches how z_contoured (non-planar ZAA) works —
-                            // it applies z_diff unconditionally within the model.
+                            // ── FW Z-amplitude fade envelope ───────────────────
+                            // Compute per-point XY-aware fade factor [0, 1].
+                            // Walks up/down from m_layer checking whether the
+                            // extrusion point falls inside stInternal polygons.
+                            // Fades from 0 (at infill boundary) to 1 (fully inside).
+                            // fade_n=0 → fade=1.0 (no fade, backward-compatible).
+                            const int    fade_n    = m_config.flow_weaving_z_fade_layers.value;
+                            const Point  fw_pt     = line.b.to_point();
+                            const float  fade      = m_fw_fade.compute(
+                                m_layer, fw_pt, fade_n,
+                                reinterpret_cast<uintptr_t>(&path));
+                            const double effective_amp =
+                                m_config.flow_weaving_z_amplitude.value * static_cast<double>(fade);
+
+                            // Overlap degree: asymmetric amplitude that presses nozzle
+                            // into the previous layer's valleys on the downward stroke.
+                            const double overlap_deg = m_config.flow_weaving_overlap_degree.value;
+
+                            double z = m_fw_z_mod.compute_z(m_nominal_z, path_length, m_layer->height,
+                                                            effective_amp, m_config.flow_weaving_period.value,
+                                                            fw_phase_idx, m_config.initial_layer_print_height.value,
+                                                            overlap_deg);
+
+                            // ── XY-aware Z clamping (FlowWeavingZClamp) ──────────────────────
+                            // Replaces the old layer_has_external_surface() scan which was
+                            // layer-level only (not XY-aware). Now checks whether the specific
+                            // extrusion point `fw_pt` lies inside a top/bottom shell polygon,
+                            // producing correct results on sloped surfaces and bridges.
+                            FlowWeavingContext fw_ctx;
                             {
-                                const int z_tol       = (int) m_config.flow_weaving_z_flow_tolerance.value;
+                                const int    z_tol    = (int) m_config.flow_weaving_z_flow_tolerance.value;
                                 const double lh       = m_layer->height;
-                                const double tol_zone = z_tol * lh; // tolerance distance (mm)
+                                const double tol_zone = z_tol * lh;
+                                const double first_z  = m_config.initial_layer_print_height.value;
 
-                                // A layer is a solid external boundary when it has top or bottom surfaces.
-                                // Internal fills (stInternal, stInternalSolid, etc.) must NOT
-                                // restrict Z-modulation — only the real model surface counts.
-                                auto layer_has_external_surface = [](const Layer* l) -> bool {
-                                    for (const LayerRegion* r : l->regions())
-                                        for (const Surface& s : r->fill_surfaces.surfaces)
-                                            if (s.is_top() || s.is_bottom())
-                                                return true;
-                                    return false;
-                                };
+                                fw_ctx.nominal_z     = m_nominal_z;
+                                fw_ctx.layer_height  = lh;
+                                fw_ctx.dbg_z_raw     = z;
+                                fw_ctx.dbg_fade      = fade;
+                                fw_ctx.dbg_eff_amp   = effective_amp;
+                                z = FlowWeavingZClamp::clamp(z, m_nominal_z, m_layer, fw_pt, tol_zone, first_z, fw_ctx);
 
-                                double deflection = z - m_nominal_z; // signed
+                                // Fill previous-layer interlock diagnostics
+                                fw_ctx.dbg_z_final = z;
+                                fw_ctx.update_prev_layer_diag();
+                            }
 
-                                if (deflection > 0.) {
-                                    // Going UP: walk to first external-surface layer.
-                                    // Accumulate height BEFORE the boundary test so that
-                                    // dist_up reflects the bottom of the boundary layer, not 0.
-                                    const Layer* check = m_layer->upper_layer;
-                                    while (check) {
-                                        if (layer_has_external_surface(check))
-                                            break;
-                                        check = check->upper_layer;
-                                    }
-                                    if (check) {
-                                        // boundary_z = TOP of the first shell layer (check->print_z).
-                                        // The nozzle may enter the shell space from below but
-                                        // must not exit above it.  dist_up is therefore measured
-                                        // to the TOP of the shell, not its bottom, so that
-                                        // adjacent-layer shells don't collapse dist_up to 0.
-                                        const double boundary_z = check->print_z;
-                                        const double dist_up    = boundary_z - m_nominal_z;
-                                        if (dist_up <= 0.) {
-                                            z = m_nominal_z;
-                                        } else {
-                                            if (tol_zone > 0. && dist_up < tol_zone) {
-                                                double scale = dist_up / tol_zone;
-                                                z            = m_nominal_z + deflection * scale;
-                                            }
-                                            if (z > boundary_z)
-                                                z = boundary_z;
-                                        }
-                                    }
-                                    // check == null: no top boundary — no clamping.
-                                } else if (deflection < 0.) {
-                                    // Going DOWN: walk to first external-surface layer.
-                                    const Layer* check = m_layer->lower_layer;
-                                    while (check) {
-                                        if (layer_has_external_surface(check))
-                                            break;
-                                        check = check->lower_layer;
-                                    }
-                                    if (check) {
-                                        // boundary_z = BOTTOM of the first shell layer below.
-                                        // The nozzle may enter the shell space from above but
-                                        // must not go below the shell's bottom face.
-                                        const double boundary_z = check->print_z - check->height;
-                                        const double dist_down  = m_nominal_z - boundary_z;
-                                        if (dist_down <= 0.) {
-                                            z = m_nominal_z;
-                                        } else {
-                                            if (tol_zone > 0. && dist_down < tol_zone) {
-                                                double scale = dist_down / tol_zone;
-                                                z            = m_nominal_z + deflection * scale;
-                                            }
-                                            if (z < boundary_z)
-                                                z = boundary_z;
-                                        }
-                                    }
-                                    // check == null: no bottom boundary — floor only.
-                                }
-                                // Absolute floor: never below first layer
-                                if (z < m_config.initial_layer_print_height.value)
-                                    z = m_config.initial_layer_print_height.value;
+                            // ── G-code debug comments ────────────────────────────────────
+                            // Emitted only when "Verbose G-code" (gcode_comments) is on.
+                            // Format: ; FW z=<final> raw=<raw> fade=<0-1> amp=<eff>mm
+                            //          gap=<gap_to_prev>mm [CLAMP_UP|CLAMP_DN]
+                            if (m_config.gcode_comments) {
+                                char fw_buf[160];
+                                const char* clamp_flag =
+                                    fw_ctx.dbg_clamped_up ? " CLAMP_UP" :
+                                    fw_ctx.dbg_clamped_dn ? " CLAMP_DN" : "";
+                                snprintf(fw_buf, sizeof(fw_buf),
+                                         "; FW z=%.4f raw=%.4f fade=%.2f amp=%.4f gap=%.4f%s\n",
+                                         fw_ctx.dbg_z_final, fw_ctx.dbg_z_raw,
+                                         fw_ctx.dbg_fade, fw_ctx.dbg_eff_amp,
+                                         fw_ctx.dbg_gap_to_prev, clamp_flag);
+                                gcode += fw_buf;
                             }
 
                             Vec2d dest2d = this->point_to_gcode(line.b.to_point());
                             gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), z), dE,
                                                              GCodeWriter::full_gcode_comment ? tempDescription : "");
+
                         } else {
                             gcode += m_writer.extrude_to_xy(this->point_to_gcode(line.b.to_point()), dE,
                                                             GCodeWriter::full_gcode_comment ? tempDescription : "",

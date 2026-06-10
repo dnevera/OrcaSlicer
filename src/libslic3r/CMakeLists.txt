@@ -153,6 +153,10 @@ set(lisbslic3r_sources
     Fill/FillCrossHatch.hpp
     Fill/FlowWeaving/FillFlowWeaving.cpp
     Fill/FlowWeaving/FillFlowWeaving.hpp
+    Fill/FlowWeaving/FlowWeavingContext.hpp
+    Fill/FlowWeaving/FlowWeavingFadeEnvelope.hpp
+    Fill/FlowWeaving/FlowWeavingGCodeState.hpp
+    Fill/FlowWeaving/FlowWeavingZClamp.hpp
     Fill/FlowWeaving/FlowWeavingZModulator.hpp
     Fill/FillGyroid.cpp
     Fill/FillGyroid.hpp

@@ -28,7 +28,8 @@
 #include "GCode/AdaptivePAProcessor.hpp"
 
 #include "GCode/TimelapsePosPicker.hpp"
-#include "Fill/FlowWeaving/FlowWeavingZModulator.hpp"
+// Flow Weaving GCode state — aggregates all FW runtime state types
+#include "Fill/FlowWeaving/FlowWeavingGCodeState.hpp"
 
 #include <memory>
 #include <map>
@@ -750,6 +751,8 @@ private:
     coordf_t m_nominal_z;
     // Flow Weaving Z-modulator (stateful: tracks cumulative path distance)
     FlowWeavingZModulator m_fw_z_mod;
+    // Flow Weaving Z-amplitude fade envelope (XY-aware infill boundary detection)
+    FlowWeavingFadeEnvelope m_fw_fade;
     bool m_need_change_layer_lift_z = false;
     int m_start_gcode_filament = -1;
     std::string m_filament_instances_code;

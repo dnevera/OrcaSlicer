@@ -4645,6 +4645,43 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
+    def           = this->add("flow_weaving_z_fade_layers", coInt);
+    def->label    = L("Z fade layers");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of infill layers over which the Z-modulation amplitude "
+                       "fades in (at the infill bottom) and fades out (at the infill top).\n\n"
+                       "Uses a per-point XY walk to detect the exact infill extent — "
+                       "handles sloped surfaces and bridge floors correctly.\n\n"
+                       "\u2022 0: no fade (abrupt start/stop)\n"
+                       "\u2022 2-3: smooth transition (recommended)\n"
+                       "\u2022 5+: very gradual, for tall infill columns");
+    def->sidetext = L("layers");
+    def->min      = 0;
+    def->max      = 20;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(3));
+
+    def           = this->add("flow_weaving_overlap_degree", coFloat);
+    def->label    = L("Layer overlap degree");
+    def->category = L("Strength");
+    def->tooltip  = L("How much the Flow Weaving nozzle presses into the previous layer's "
+                       "valleys on the downward stroke, expressed as a fraction of Z amplitude.\n\n"
+                       "When non-zero, the downward half of the sinusoidal Z cycle is amplified "
+                       "by (1 + overlap_degree), causing the nozzle to physically press deeper "
+                       "into the ridges of the layer below. This creates true mechanical interlock "
+                       "and improves delamination resistance.\n\n"
+                       "\u2022 0.0: symmetric wave, no interlocking bias (default)\n"
+                       "\u2022 0.1-0.3: gentle overlap, suitable for most materials (recommended)\n"
+                       "\u2022 0.3-0.6: strong interlocking, use with flexible or compliant materials\n"
+                       "\u2022 >0.6: aggressive, may cause surface defects on brittle plastics\n\n"
+                       "Z-clamping prevents the nozzle from going below the first layer "
+                       "regardless of this value.");
+    def->sidetext = "";
+    def->min      = 0.0;
+    def->max      = 1.0;
+    def->mode     = comExpert;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def             = this->add("layer_change_gcode", coString);
     def->label      = L("Layer change G-code");
     def->tooltip    = L("This G-code is inserted at every layer change after the Z lift.");

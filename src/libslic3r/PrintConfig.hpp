@@ -1401,6 +1401,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                  flow_weaving_xy_amplitude))
     ((ConfigOptionFloat,                  flow_weaving_period))
     ((ConfigOptionInt,                    flow_weaving_z_flow_tolerance))
+    ((ConfigOptionInt,                    flow_weaving_z_fade_layers))
+    // Flow Weaving: overlap degree — how much the downward stroke presses into the
+    // previous layer's valleys to enhance interlayer adhesion.
+    // 0.0 = symmetric sine (no interlocking bias)
+    // 0.3 = 30% extra downward push (recommended)
+    // 1.0 = full amplitude boost on downward stroke (maximum adhesion)
+    ((ConfigOptionFloat,                  flow_weaving_overlap_degree))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

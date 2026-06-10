@@ -102,7 +102,7 @@ public:
         return ratio * ratio * (3.0 - 2.0 * ratio); // smoothstep
     }
 
-    // ── Z computation (uses internal state) ──────────────────────────────
+    // Z computation (uses internal state) ──────────────────────────────
     //
     //  nominal_z         — the layer's nominal print Z (mm)
     //  local_path_length — distance accumulated within the CURRENT sub-path (mm)
@@ -110,6 +110,12 @@ public:
     //  z_amplitude       — modulation amplitude as % of layer_height
     //  period            — wave period in mm
     //  phase_idx         — sequential FW layer index for phase alternation
+    //  first_layer_z     — absolute floor (nozzle must never go below this)
+    //  overlap_degree    — [0, 1] fraction of extra downward push to interlock
+    //                      with the previous layer's ridges.  On the downward
+    //                      stroke (t < 0) the amplitude is multiplied by
+    //                      (1 + overlap_degree), pressing the nozzle into the
+    //                      valleys left by the layer below.  0 = symmetric wave.
     //
     // The effective distance along the wave is m_path_offset + local_path_length,
     // giving a continuous sine wave across all sub-paths of a multi-path.
@@ -120,19 +126,28 @@ public:
     // GCode.cpp _extrude().
     inline double compute_z(
         double nominal_z, double local_path_length, double layer_height, double z_amplitude, double period, int phase_idx,
-        double first_layer_z = 0.2) const
+        double first_layer_z = 0.2, double overlap_degree = 0.0) const
     {
         const double dist = m_path_offset + local_path_length;
         const double amp  = z_amplitude / 100.0; // % → fraction
-
-        // Full desired deflection (no pre-reduction)
-        const double desired = amp * layer_height;
 
         // Phase alternation: caller supplies a sequential FW index
         // (not raw layer_id, which breaks with combine_infill).
         const double phase = M_PI * (phase_idx % 2); // 0 or π
         const double t     = std::sin(2.0 * M_PI * dist / period + phase);
-        // Z amplitude depends ONLY on z_amplitude × layer_height.
+
+        // Asymmetric amplitude: on the downward stroke (t < 0), amplify by
+        // (1 + overlap_degree) to press into the previous layer's ridges.
+        // This creates a true mechanical interlock between adjacent layers.
+        // On the upward stroke (t >= 0) the amplitude is unchanged.
+        const double amp_eff = (t < 0.0 && overlap_degree > 0.0)
+                               ? amp * (1.0 + overlap_degree)
+                               : amp;
+
+        // Full desired deflection (with asymmetric overlap applied)
+        const double desired = amp_eff * layer_height;
+
+        // Z amplitude depends ONLY on z_amplitude × layer_height (× overlap factor).
         // No wall taper, no ceiling/floor clamping here.
         // Model boundary protection is handled entirely by the
         // model-aware clamping (lslices check) in GCode.cpp.
@@ -144,6 +159,7 @@ public:
             z = first_layer_z;
         return z;
     }
+
 
     // ── Z-reset suppression ──────────────────────────────────────────────
     //

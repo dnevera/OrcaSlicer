@@ -1022,7 +1022,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     }
     toggle_field("sparse_infill_density", !is_flow_weaving);
     for (auto el : {"flow_weaving_z_amplitude", "flow_weaving_xy_amplitude",
-                    "flow_weaving_period", "flow_weaving_z_flow_tolerance"})
+                    "flow_weaving_period", "flow_weaving_z_flow_tolerance",
+                    "flow_weaving_z_fade_layers"})
         toggle_line(el, is_flow_weaving);
 
     std::string printer_type = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);

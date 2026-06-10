@@ -1302,6 +1302,7 @@ static std::vector<std::string> s_Preset_print_options{
     "flow_weaving_xy_amplitude",
     "flow_weaving_period",
     "flow_weaving_z_flow_tolerance",
+    "flow_weaving_z_fade_layers",
 };
 
 static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", */ "default_filament_colour", "required_nozzle_HRC", "filament_diameter", "pellet_flow_coefficient", "volumetric_speed_coefficients", "filament_type",
