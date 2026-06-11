@@ -1296,6 +1296,10 @@ static std::vector<std::string> s_Preset_print_options{
     "zaa_minimize_perimeter_height",
     "zaa_dont_alternate_fill_direction",
     "zaa_min_z",
+    // FlowWeaving
+    "flow_weaving_z_amplitude",
+    "flow_weaving_xy_amplitude",
+    "flow_weaving_period",
     "ironing_expansion",
 };
 

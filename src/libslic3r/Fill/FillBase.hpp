@@ -174,6 +174,12 @@ public:
     // Override to return true; make_fills() will populate no_overlap_above/below.
     virtual bool needs_cross_layer_data() const { return false; }
 
+    // When sparse_infill_density == 100%, prepare_fill_surfaces() converts stInternal
+    // surfaces to stInternalSolid and they would normally skip the sparse fill.
+    // Override to return true to redirect those stInternalSolid surfaces back through
+    // fill_surface_extrusion() at full density (e.g. FlowWeaving must run at any density).
+    virtual bool handles_solid_internal() const { return false; }
+
     virtual bool is_self_crossing() = 0;
 
     // Return true if infill has a consistent pattern between layers.

@@ -645,6 +645,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     toggle_line("symmetric_infill_y_axis", is_zig_zag || is_cross_zag || is_locked_zig);
 
+    // FlowWeaving infill — show parameters only when pattern is FlowWeaving
+    bool is_flow_weaving = pattern == ipFlowWeaving;
+    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_period" })
+        toggle_line(el, is_flow_weaving);
+
     bool has_spiral_vase         = config->opt_bool("spiral_mode");
     toggle_line("spiral_mode_smooth", has_spiral_vase);
     toggle_line("spiral_mode_max_xy_smoothing", has_spiral_vase && config->opt_bool("spiral_mode_smooth"));

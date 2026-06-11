@@ -37,6 +37,10 @@ public:
     // Request adjacent-layer no_overlap data from make_fills().
     bool needs_cross_layer_data() const override { return true; }
 
+    // FlowWeaving runs at any density, including 100% where stInternal→stInternalSolid.
+    // Returning true redirects those solid internal surfaces back through our fill code.
+    bool handles_solid_internal() const override { return true; }
+
     // Override to inject Z/XY modulation via sub-segmented ExtrusionPathContoured.
     void fill_surface_extrusion(
         const Surface*          surface,

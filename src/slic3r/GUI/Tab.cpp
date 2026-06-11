@@ -2496,9 +2496,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("lightning_overhang_angle", "strength_settings_patterns#lightning");
         optgroup->append_single_option_line("lightning_prune_angle", "strength_settings_patterns#lightning");
         optgroup->append_single_option_line("lightning_straightening_angle", "strength_settings_patterns#lightning");
-        optgroup->append_single_option_line("flow_weaving_z_amplitude", "strength_settings_patterns#flow-weaving");
-        optgroup->append_single_option_line("flow_weaving_xy_amplitude", "strength_settings_patterns#flow-weaving");
-        optgroup->append_single_option_line("flow_weaving_period", "strength_settings_patterns#flow-weaving");
         optgroup->append_single_option_line("infill_anchor_max", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("infill_anchor", "strength_settings_infill#anchor");
         optgroup->append_single_option_line("internal_solid_infill_pattern", "strength_settings_infill#internal-solid-infill");
@@ -2507,6 +2504,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("gap_fill_target", "strength_settings_infill#apply-gap-fill");
         optgroup->append_single_option_line("filter_out_gap_fill", "strength_settings_infill#filter-out-tiny-gaps");
         optgroup->append_single_option_line("infill_wall_overlap", "strength_settings_infill#infill-wall-overlap");
+
+        optgroup = page->new_optgroup(L("Flow weaving"), L"param_flowweaving_group");
+        optgroup->append_single_option_line("flow_weaving_z_amplitude");
+        optgroup->append_single_option_line("flow_weaving_xy_amplitude");
+        optgroup->append_single_option_line("flow_weaving_period");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");

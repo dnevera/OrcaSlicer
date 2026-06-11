@@ -23,6 +23,7 @@
 #include "../../ClipperUtils.hpp"
 #include "../../ExPolygon.hpp"
 #include "../../ExtrusionEntityCollection.hpp"
+#include "../../PrintConfig.hpp"
 #include "../../Surface.hpp"
 
 #include <cmath>
@@ -46,17 +47,20 @@ void FillFlowWeaving::fill_surface_extrusion(
     ExtrusionEntitiesPtr&   out)
 {
     // ── 0. Read config ───────────────────────────────────────────────────────
+    // flow_weaving_* live in PrintRegionConfig (Process settings).
+    // params.config already merges global process profile + per-object overrides.
+    // Using virtual option<>() instead of static_cast for safety.
     double z_amp_pct = DEFAULT_Z_AMPLITUDE_PCT;
     double xy_amp    = DEFAULT_XY_AMPLITUDE;
     double period_mm = DEFAULT_PERIOD_MM;
 
     if (params.config) {
-        if (params.config->has("flow_weaving_z_amplitude"))
-            z_amp_pct = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude")->value;
-        if (params.config->has("flow_weaving_xy_amplitude"))
-            xy_amp = params.config->option<ConfigOptionFloat>("flow_weaving_xy_amplitude")->value / 100.0;
-        if (params.config->has("flow_weaving_period"))
-            period_mm = params.config->option<ConfigOptionFloat>("flow_weaving_period")->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
+            z_amp_pct = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_xy_amplitude"))
+            xy_amp = v->value / 100.0;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_period"))
+            period_mm = v->value;
     }
 
     const double z_amp_frac = z_amp_pct / 100.0;
@@ -86,11 +90,24 @@ void FillFlowWeaving::fill_surface_extrusion(
     out.push_back(eec = new ExtrusionEntityCollection());
     eec->no_sort = this->no_sort();
 
-    // ── 4. Modulator + phase ─────────────────────────────────────────────────
+    // ── 4. Modulator ─────────────────────────────────────────────────────────
     auto modulator = FlowWeavingModulator::create(ModulatorType::Sine);
 
-    // Phase alternation: even layers → 0, odd layers → π
-    const double phase_rad = (this->layer_id % 2 == 0) ? 0.0 : M_PI;
+    // Base phase alternates by layer (cross-layer interlocking).
+    // Each polyline additionally flips phase by poly_idx parity so that
+    // ADJACENT LINES within the same layer are always in antiphase:
+    //   layer even: line 0 → 0, line 1 → π, line 2 → 0, ...
+    //   layer odd:  line 0 → π, line 1 → 0, line 2 → π, ...
+    // fill_surface (rectilinear) returns polylines in spatial order, so
+    // poly_idx == line number is guaranteed without any angle/spacing math.
+    const double layer_base_phase = (this->layer_id % 2 == 0) ? 0.0 : M_PI;
+
+    // Global perpendicular to the fill direction used for XY displacement.
+    // MUST be global (not per-segment) because rectilinear zigzag reverses
+    // travel direction on odd lines, which would flip per-segment perp and
+    // cancel the phase offset — resulting in all lines going the same way.
+    // global_perp = fill_dir rotated 90° CCW = (-sinθ, cosθ).
+    const Vec2d global_perp(-std::sin(this->angle), std::cos(this->angle));
 
     // Sub-division step
     const int    n_sub   = this->subdivisions_per_period();
@@ -108,9 +125,13 @@ void FillFlowWeaving::fill_surface_extrusion(
     const bool have_safe_zone   = !safe_zone.empty();
 
     // ── 5. Process each polyline ─────────────────────────────────────────────
-    for (Polyline& pl : polylines) {
+    for (size_t poly_idx = 0; poly_idx < polylines.size(); ++poly_idx) {
+        Polyline& pl = polylines[poly_idx];
         if (pl.size() < 2)
             continue;
+
+        // Alternate phase by line index: odd lines are in antiphase to even lines.
+        const double phase_rad = layer_base_phase + ((poly_idx % 2 != 0) ? M_PI : 0.0);
 
         // Measure total path length (mm) for taper
         double total_len_mm = 0.0;
@@ -125,8 +146,10 @@ void FillFlowWeaving::fill_surface_extrusion(
 
         const double taper_len_mm = total_len_mm * DEFAULT_TAPER_FRACTION;
 
-        // Collect sub-segment paths for this polyline
-        ExtrusionPaths sub_paths;
+        // Max lateral displacement: fraction of flow width
+        // xy_amp (e.g. 0.15) × flow_width gives ~15% lateral offset
+        const double lateral_amp_mm = xy_amp * flow_width;
+
         double pos_mm = 0.0;  // accumulated position along polyline
 
         for (size_t seg = 0; seg < pl.size() - 1; ++seg) {
@@ -142,6 +165,11 @@ void FillFlowWeaving::fill_surface_extrusion(
                 continue;
             }
 
+            // Recalculate dir for each segment (for taper and length calculation).
+            // XY displacement uses global_perp, NOT per-segment perp, so that
+            // zigzag direction reversal on odd lines doesn't cancel the phase offset.
+            Vec2d dir = (b - a).normalized();
+
             int n_steps = std::max(1, static_cast<int>(std::ceil(seg_len_mm / step_mm)));
 
             for (int step = 0; step < n_steps; ++step) {
@@ -153,18 +181,35 @@ void FillFlowWeaving::fill_surface_extrusion(
                 double sub_end_pos   = pos_mm + seg_len_mm * t_end;
                 double sub_mid_pos   = pos_mm + seg_len_mm * t_mid;
 
-                // XY start/end points (scaled integer coords)
-                Point pt_start(
-                    pa.x() + coord_t(std::round((pb.x() - pa.x()) * t_start)),
-                    pa.y() + coord_t(std::round((pb.y() - pa.y()) * t_start)));
-                Point pt_end(
-                    pa.x() + coord_t(std::round((pb.x() - pa.x()) * t_end)),
-                    pa.y() + coord_t(std::round((pb.y() - pa.y()) * t_end)));
+                // Modulation values at sub-segment positions
+                double t_mod_start = modulator->compute(sub_start_pos, period_mm, phase_rad);
+                double t_mod_end   = modulator->compute(sub_end_pos,   period_mm, phase_rad);
+                double t_mod_mid   = modulator->compute(sub_mid_pos,   period_mm, phase_rad);
 
-                // Midpoint for safe-zone test
-                Point mid_pt(
-                    pa.x() + coord_t(std::round((pb.x() - pa.x()) * t_mid)),
-                    pa.y() + coord_t(std::round((pb.y() - pa.y()) * t_mid)));
+                double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
+
+                // ── XY lateral displacement (the actual physical wave) ───────
+                // Offset perpendicular to travel direction by sine × amplitude
+                double xy_off_start = lateral_amp_mm * t_mod_start * taper_val;
+                double xy_off_end   = lateral_amp_mm * t_mod_end   * taper_val;
+
+                // Base XY positions along the straight segment
+                Vec2d base_start = a + (b - a) * t_start;
+                Vec2d base_end   = a + (b - a) * t_end;
+                Vec2d base_mid   = a + (b - a) * t_mid;
+
+                // Apply perpendicular displacement using GLOBAL perp direction.
+                Vec2d disp_start = base_start + global_perp * xy_off_start;
+                Vec2d disp_end   = base_end   + global_perp * xy_off_end;
+                Vec2d disp_mid   = base_mid   + global_perp * ((xy_off_start + xy_off_end) * 0.5);
+
+                // Convert to scaled integer coords
+                Point pt_start(coord_t(std::round(disp_start.x() / SCALING_FACTOR)),
+                                coord_t(std::round(disp_start.y() / SCALING_FACTOR)));
+                Point pt_end(  coord_t(std::round(disp_end.x()   / SCALING_FACTOR)),
+                                coord_t(std::round(disp_end.y()   / SCALING_FACTOR)));
+                Point mid_pt(  coord_t(std::round(disp_mid.x()   / SCALING_FACTOR)),
+                                coord_t(std::round(disp_mid.y()   / SCALING_FACTOR)));
 
                 // Gate: is midpoint inside the safe zone?
                 double gate = 1.0;
@@ -175,22 +220,15 @@ void FillFlowWeaving::fill_surface_extrusion(
                     }
                 }
 
-                // Modulation at sub-segment endpoints
-                double t_mod_start = modulator->compute(sub_start_pos, period_mm, phase_rad);
-                double t_mod_end   = modulator->compute(sub_end_pos, period_mm, phase_rad);
-                double t_mod_mid   = modulator->compute(sub_mid_pos, period_mm, phase_rad);
-
-                double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
-
                 // ── Z modulation ─────────────────────────────────────────
                 double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
                 double z_end   = z_amp_frac * layer_h * t_mod_end   * taper_val * gate;
 
-                // ── XY flow modulation ───────────────────────────────────
-                // At peak (t>0): wider extrusion → forms the "tooth"
-                // At trough (t<0): narrower → makes room for next-layer tooth
-                double flow_factor = 1.0 + xy_amp * t_mod_mid * taper_val * gate;
-                flow_factor = std::max(0.3, std::min(1.8, flow_factor));
+                // ── Flow compensation for narrower/wider extrusion ────────
+                // When displaced sideways, effective width varies with cos(angle)
+                // but keep simple: extrusion tracks the displacement magnitude
+                double flow_factor = 1.0 + xy_amp * std::abs(t_mod_mid) * taper_val * gate;
+                flow_factor = std::max(0.5, std::min(1.5, flow_factor));
 
                 // ── Build sub-segment ExtrusionPathContoured ─────────────
                 double sub_mm3 = flow_mm3_per_mm * flow_factor;

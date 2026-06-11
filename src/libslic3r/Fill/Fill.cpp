@@ -860,6 +860,13 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 	for (size_t region_id = 0; region_id < layer.regions().size(); ++ region_id) {
 		const LayerRegion  &layerm = *layer.regions()[region_id];
 		region_to_surface_params[region_id].assign(layerm.fill_surfaces.size(), nullptr);
+		// Query once per region via virtual dispatch: does the sparse pattern want to
+		// handle stInternalSolid surfaces? (needed when density==100% converts stInternal)
+		bool sparse_fill_handles_solid = false;
+		{
+		    std::unique_ptr<Fill> probe(Fill::new_from_type(layerm.region().config().sparse_infill_pattern.value));
+		    if (probe) sparse_fill_handles_solid = probe->handles_solid_internal();
+		}
 	    for (const Surface &surface : layerm.fill_surfaces.surfaces)
 	        if (surface.surface_type == stInternalVoid)
 	        	has_internal_voids = true;
@@ -887,7 +894,12 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 }
 
                 if (surface.is_solid()) {
-                    if (surface.is_external() && !is_bridge) {
+                    if (surface.surface_type == stInternalSolid && sparse_fill_handles_solid) {
+                        // Sparse fill handles solid-internal (e.g. FlowWeaving at 100% density).
+                        // Redirect back to sparse pattern via virtual dispatch — no subclass names here.
+                        params.pattern = region_config.sparse_infill_pattern.value;
+                        params.density = 100.f;
+                    } else if (surface.is_external() && !is_bridge) {
                         if (surface.is_top()) {
                             params.pattern = region_config.top_surface_pattern.value;
                             params.density = float(region_config.top_surface_density);
@@ -920,6 +932,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                         params.extrusion_role = erTopSolidInfill;
                     } else if (surface.is_bottom()) {
                         params.extrusion_role = erBottomSurface;
+                    } else if (surface.surface_type == stInternalSolid && sparse_fill_handles_solid) {
+                        // keep erInternalInfill (already set above)
                     } else {
                         params.extrusion_role = erSolidInfill;
                     }
