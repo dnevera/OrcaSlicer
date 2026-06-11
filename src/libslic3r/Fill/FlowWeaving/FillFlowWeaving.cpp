@@ -96,8 +96,15 @@ void FillFlowWeaving::fill_surface_extrusion(
     const int    n_sub   = this->subdivisions_per_period();
     const double step_mm = period_mm / static_cast<double>(n_sub);
 
-    // Safe zone for cross-layer gating (pre-tightened by Fill.cpp)
-    const ExPolygons& safe_zone = this->no_overlap_expolygons;
+    // Safe zone for cross-layer gating.
+    // Intersect current layer's no_overlap with adjacent layers' data
+    // (populated by make_fills() via needs_cross_layer_data() interface).
+    ExPolygons cross_layer_safe = this->no_overlap_expolygons;
+    if (!this->no_overlap_above.empty())
+        cross_layer_safe = intersection_ex(cross_layer_safe, this->no_overlap_above);
+    if (!this->no_overlap_below.empty())
+        cross_layer_safe = intersection_ex(cross_layer_safe, this->no_overlap_below);
+    const ExPolygons& safe_zone = cross_layer_safe;
     const bool have_safe_zone   = !safe_zone.empty();
 
     // ── 5. Process each polyline ─────────────────────────────────────────────

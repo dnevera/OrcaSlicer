@@ -1335,24 +1335,20 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 
       f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
 
-            // FlowWeaving: tighten safe zone by intersecting with adjacent layers
-            if (surface_fill.params.pattern == ipFlowWeaving) {
-                ExPolygons safe = f->no_overlap_expolygons;
+            // Populate adjacent-layer no_overlap data for patterns that need it
+            if (f->needs_cross_layer_data()) {
                 const size_t layer_idx = this->id();
                 const auto& layers = this->object()->layers();
                 if (layer_idx + 1 < layers.size()) {
-                    ExPolygons upper;
+                    f->no_overlap_above.clear();
                     for (const LayerRegion* lr : layers[layer_idx + 1]->regions())
-                        append(upper, lr->fill_no_overlap_expolygons);
-                    safe = intersection_ex(safe, upper);
+                        append(f->no_overlap_above, lr->fill_no_overlap_expolygons);
                 }
                 if (layer_idx > 0) {
-                    ExPolygons lower;
+                    f->no_overlap_below.clear();
                     for (const LayerRegion* lr : layers[layer_idx - 1]->regions())
-                        append(lower, lr->fill_no_overlap_expolygons);
-                    safe = intersection_ex(safe, lower);
+                        append(f->no_overlap_below, lr->fill_no_overlap_expolygons);
                 }
-                f->no_overlap_expolygons = std::move(safe);
             }
 
             if (params.symmetric_infill_y_axis) {

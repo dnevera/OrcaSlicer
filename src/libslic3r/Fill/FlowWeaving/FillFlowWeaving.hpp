@@ -34,6 +34,9 @@ public:
     Fill* clone() const override { return new FillFlowWeaving(*this); }
     ~FillFlowWeaving() override = default;
 
+    // Request adjacent-layer no_overlap data from make_fills().
+    bool needs_cross_layer_data() const override { return true; }
+
     // Override to inject Z/XY modulation via sub-segmented ExtrusionPathContoured.
     void fill_surface_extrusion(
         const Surface*          surface,
