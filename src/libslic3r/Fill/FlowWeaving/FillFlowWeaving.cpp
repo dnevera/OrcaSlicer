@@ -4,8 +4,8 @@
 //
 // Each infill polyline is subdivided into short sub-segments.  For each
 // sub-segment we compute:
-//   - Z offset  = z_amp * layer_h * sin(pos) * taper * gate
-//   - XY factor = 1 + xy_amp * sin(pos) * taper * gate
+//   - Z offset      = z_amp × layer_h × sin(pos) × taper × gate
+//   - flow          = nominal (constant, no modulation — pending print validation)
 //
 // Each sub-segment becomes its own ExtrusionPathContoured:
 //   - mm3_per_mm already includes the XY flow factor
@@ -37,11 +37,12 @@ namespace Slic3r {
 
 // ── Defaults (used when config keys are missing) ─────────────────────────────
 static constexpr double DEFAULT_Z_AMPLITUDE_PCT   = 30.0; // % of layer height
-static constexpr double DEFAULT_XY_AMPLITUDE      = 50.0; // % of flow width (width modulation)
-static constexpr double DEFAULT_XY_PATH_AMPLITUDE = 0.2;  // mm lateral path displacement
-static constexpr double DEFAULT_PERIOD_MM         = 3.0;  // mm per full wave
-static constexpr double DEFAULT_PHASE_OFFSET      = 0.5;  // fraction of period (0-1)
+static constexpr double DEFAULT_XY_AMPLITUDE      = 10.0; // % of flow width (width modulation)
+static constexpr double DEFAULT_XY_PATH_AMPLITUDE = 0.02; // mm lateral path displacement
+static constexpr double DEFAULT_PERIOD_MM         = 0.5;  // mm per full wave
+static constexpr double DEFAULT_PHASE_OFFSET      = 0.2;  // fraction of period (0-1)
 static constexpr double DEFAULT_TAPER_MM          = 1.5;  // mm absolute taper near walls
+
 
 void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out)
 {
@@ -142,24 +143,38 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         if (pl.size() < 2)
             continue;
 
-        // ── Safety bounds (constant per polyline, read once) ─────────────────
-        // Lower: nozzle may not dip more than z_overlap% of layer_h below nominal.
-        const double z_overlap_pct = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
-        const double overlap_limit  = -(layer_h * z_overlap_pct / 100.0);
-        // Absolute floor: nozzle must never go below the first layer surface.
-        const double first_layer_h  = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
-        const double absolute_floor = -(this->z - first_layer_h);
-        const double min_z_diff     = std::max(overlap_limit, absolute_floor);
-
-        // Upper: smoothstep fade of upward amplitude near top solid shell.
+        // ── Taper scale — shared by ALL Z bounds (up AND down) ───────────
+        // Last 2 infill layers: HARD cutoff (taper_scale = 0 → no Z modulation).
+        // Above that: smoothstep fade over top_taper_layers layers.
+        //
+        //  infill_layers_above:   0   1 │ 2        3        4        5  ...
+        //  taper_scale:           0   0 │ s(1/n)  s(2/n)  s(3/n)  1.0  ...
+        //                         ↑hard↑  ├── smoothstep zone ──────────────
         const int top_taper_n = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
-        double max_z_up = z_amp_frac * layer_h; // unrestricted by default
-        if (top_taper_n > 0) {
-            const double x       = std::min(static_cast<double>(this->infill_layers_above)
-                                            / static_cast<double>(top_taper_n), 1.0);
-            const double s       = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0,1]
-            max_z_up             = z_amp_frac * layer_h * s;
+        double taper_scale = 1.0;
+        if (this->infill_layers_above < 2) {
+            // Hard disable: last 2 infill layers print flat (no Z oscillation)
+            taper_scale = 0.0;
+        } else if (top_taper_n > 0) {
+            // Smooth fade: x counts layers above the hard-cutoff zone
+            const double x = std::min(static_cast<double>(this->infill_layers_above - 1)
+                                      / static_cast<double>(top_taper_n), 1.0);
+            taper_scale = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
         }
+
+        // Upper bound: max upward Z offset (zero on last 2 layers)
+        const double max_z_up = z_amp_frac * layer_h * taper_scale;
+
+        // Lower bound: nozzle may not dip more than z_overlap% of layer_h below nominal.
+        // Tapered by the same scale → zero on last 2 layers, full overlap far from top.
+        const double z_overlap_pct      = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
+        const double overlap_tapered    = -(layer_h * z_overlap_pct / 100.0) * taper_scale;
+        // Absolute floor: nozzle must never go below the first layer surface.
+        const double first_layer_h      = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
+        const double absolute_floor     = -(this->z - first_layer_h);
+        // Most restrictive (least negative) of the two lower limits.
+        const double min_z_diff         = std::max(overlap_tapered, absolute_floor);
+
 
         // Alternate phase by line index: odd lines are in antiphase to even lines.
         const double phase_rad = layer_base_phase + ((poly_idx % 2 != 0) ? M_PI : 0.0);
@@ -269,16 +284,15 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 z_start = std::min(z_start, max_z_up);
                 z_end   = std::min(z_end,   max_z_up);
 
-                // ── Flow/width modulation ─────────────────────────────────
-                // Line width varies with the sine.  Clamp between
-                // 25% of flow_width (minimum) and nozzle diameter (maximum).
-                double width_delta     = width_amp_mm * t_mod_mid * taper_val * gate;
-                double effective_width = std::clamp(flow_width + width_delta,
-                                                    flow_width * 0.25, (double) nozzle_d);
-                double sub_mm3         = flow_mm3_per_mm * (effective_width / flow_width);
+                // ── Flow ──────────────────────────────────────────────────
+                // Constant nominal flow for now — no width or Z-coupled
+                // modulation.  Flow modulation (height-based or width-based)
+                // will be re-introduced once Z-wave print quality is confirmed.
+                const double sub_mm3 = flow_mm3_per_mm;
 
                 ExtrusionPath base_path(params.extrusion_role, sub_mm3,
                                         float(flow_width), params.flow.height());
+
                 base_path.z_contoured = true;
 
                 // Polyline3: 2 points with Z offsets encoded in .z()
