@@ -40,6 +40,7 @@ static constexpr double DEFAULT_Z_AMPLITUDE_PCT = 30.0;  // % of layer height
 static constexpr double DEFAULT_XY_AMPLITUDE       = 50.0;  // % of flow width (width modulation)
 static constexpr double DEFAULT_XY_PATH_AMPLITUDE   = 0.2;   // mm lateral path displacement
 static constexpr double DEFAULT_PERIOD_MM           = 3.0;   // mm per full wave
+static constexpr double DEFAULT_PHASE_OFFSET        = 0.5;   // fraction of period (0-1)
 static constexpr double DEFAULT_TAPER_MM            = 1.5;   // mm absolute taper near walls
 
 void FillFlowWeaving::fill_surface_extrusion(
@@ -55,6 +56,7 @@ void FillFlowWeaving::fill_surface_extrusion(
     double xy_amp         = DEFAULT_XY_AMPLITUDE;
     double xy_path_amp_mm = DEFAULT_XY_PATH_AMPLITUDE;
     double period_mm      = DEFAULT_PERIOD_MM;
+    double phase_offset   = DEFAULT_PHASE_OFFSET;
 
     if (params.config) {
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
@@ -65,6 +67,8 @@ void FillFlowWeaving::fill_surface_extrusion(
             xy_path_amp_mm = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_period"))
             period_mm = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_phase_offset"))
+            phase_offset = v->value;
     }
 
     const double z_amp_frac  = z_amp_pct / 100.0;
@@ -99,14 +103,17 @@ void FillFlowWeaving::fill_surface_extrusion(
     // ── 4. Modulator ─────────────────────────────────────────────────────────
     auto modulator = FlowWeavingModulator::create(ModulatorType::Sine);
 
-    // Base phase alternates by layer (cross-layer interlocking).
-    // Each polyline additionally flips phase by poly_idx parity so that
-    // ADJACENT LINES within the same layer are always in antiphase:
-    //   layer even: line 0 → 0, line 1 → π, line 2 → 0, ...
-    //   layer odd:  line 0 → π, line 1 → 0, line 2 → π, ...
-    // fill_surface (rectilinear) returns polylines in spatial order, so
-    // poly_idx == line number is guaranteed without any angle/spacing math.
-    const double layer_base_phase = (this->layer_id % 2 == 0) ? 0.0 : M_PI;
+    // Base phase: layers alternate fill direction every layer (0°, 90°, 0°, 90°, ...).
+    // Same-direction layers are: 0,2,4,... (set A) and 1,3,5,... (set B).
+    // Within each set, apply progressive phase_offset so that waves shift
+    // between layers sharing the same direction → better interlocking.
+    //
+    // same_dir_idx = layer_id / 2  (how many same-direction layers came before)
+    // layer_base_phase = π for odd layers (antiphase vs even layers)
+    //                  + same_dir_idx × phase_offset × 2π  (progressive shift)
+    const size_t same_dir_idx = this->layer_id / 2;
+    const double layer_base_phase = ((this->layer_id % 2 == 0) ? 0.0 : M_PI)
+                                  + same_dir_idx * phase_offset * 2.0 * M_PI;
 
     // Global perpendicular to the ACTUAL fill direction (including layer rotation).
     // this->angle is the base angle from config; _layer_angle() adds +90° on odd

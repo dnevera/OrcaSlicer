@@ -4621,6 +4621,19 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(3.0));
 
+    def           = this->add("flow_weaving_phase_offset", coFloat);
+    def->label    = L("Layer phase offset");
+    def->category = L("Strength");
+    def->tooltip  = L("Phase shift of the wave between same-direction layers,\n"
+                      "as a fraction of the wave period.\n"
+                      "0 = no shift (waves align), 0.5 = half-period shift (best interlocking).\n"
+                      "Applied every other layer (layers sharing the same fill direction).");
+    def->sidetext = L("×period");
+    def->min      = 0;
+    def->max      = 1.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
     def->category = L("Quality");

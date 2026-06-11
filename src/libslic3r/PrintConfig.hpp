@@ -1400,6 +1400,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, flow_weaving_xy_amplitude))
     ((ConfigOptionFloat, flow_weaving_xy_path_amplitude))
     ((ConfigOptionFloat, flow_weaving_period))
+    ((ConfigOptionFloat, flow_weaving_phase_offset))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(
