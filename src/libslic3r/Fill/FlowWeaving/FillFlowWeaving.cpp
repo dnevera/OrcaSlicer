@@ -121,6 +121,11 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                                                 this->_layer_angle(this->layer_id / surface->thickness_layers) :
                                                 0.f);
     const Vec2d global_perp(-std::sin(fill_angle), std::cos(fill_angle));
+    // Fill direction (along the lines). Used for spatial-phase computation:
+    // projecting XY position onto fill_dir gives a coordinate that is the
+    // SAME for every parallel line at the same cross-section, regardless of
+    // whether the line travels forward or backward (zigzag).
+    const Vec2d fill_dir(std::cos(fill_angle), std::sin(fill_angle));
 
     // Sub-division step
     const int n_sub      = this->subdivisions_per_period();
@@ -144,23 +149,31 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             continue;
 
         // ── Taper scale — shared by ALL Z bounds (up AND down) ───────────
-        // Last 2 infill layers: HARD cutoff (taper_scale = 0 → no Z modulation).
-        // Above that: smoothstep fade over top_taper_layers layers.
+        // Hard cutoff: the bottom `top_taper_n` infill layers are COMPLETELY
+        // flat (taper_scale = 0) to provide a flat bed for the top solid shell.
+        // Above that zone: smoothstep fade over another `top_taper_n` layers.
         //
-        //  infill_layers_above:   0   1 │ 2        3        4        5  ...
-        //  taper_scale:           0   0 │ s(1/n)  s(2/n)  s(3/n)  1.0  ...
-        //                         ↑hard↑  ├── smoothstep zone ──────────────
+        //  infill_layers_above:   0..N-1 │ N       N+1      N+2    2N  ...
+        //  taper_scale:           0  ...0 │ s(1/N)  s(2/N)  ...   1.0  ...
+        //                         ↑ hard cutoff ↑   ├── smoothstep ────────
+        //  (N = top_taper_n, default 4)
+        //
+        // With top_taper_n=4: last 4 infill layers flat, then 4 layers of fade.
+        // This ensures the top surface is free of Z-wave artifacts even at
+        // short periods (0.5mm) where Z-ripples telegraph through thin top shells.
         const int top_taper_n = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
         double taper_scale = 1.0;
-        if (this->infill_layers_above < 2) {
-            // Hard disable: last 2 infill layers print flat (no Z oscillation)
+        if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
+            // Hard disable: last top_taper_n infill layers print flat
             taper_scale = 0.0;
         } else if (top_taper_n > 0) {
-            // Smooth fade: x counts layers above the hard-cutoff zone
-            const double x = std::min(static_cast<double>(this->infill_layers_above - 1)
+            // Smooth fade starting above the hard-cutoff zone.
+            // x=0 at ia=top_taper_n, x=1 at ia=2*top_taper_n
+            const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1)
                                       / static_cast<double>(top_taper_n), 1.0);
             taper_scale = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
         }
+
 
         // Upper bound: max upward Z offset (zero on last 2 layers)
         const double max_z_up = z_amp_frac * layer_h * taper_scale;
@@ -176,8 +189,14 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         const double min_z_diff         = std::max(overlap_tapered, absolute_floor);
 
 
-        // Alternate phase by line index: odd lines are in antiphase to even lines.
-        const double phase_rad = layer_base_phase + ((poly_idx % 2 != 0) ? M_PI : 0.0);
+        // All lines within the same layer share the same phase (synchronous).
+        // This maximises intra-layer adhesion: adjacent lines bond along their
+        // full side surfaces rather than meeting only at peak tips (antiphase).
+        //
+        // Inter-layer interlocking is still achieved via layer_base_phase,
+        // which alternates by π between consecutive layers.
+        const double phase_rad = layer_base_phase;
+
 
         // Measure total path length (mm) for taper
         double total_len_mm = 0.0;
@@ -227,10 +246,22 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 double sub_end_pos   = pos_mm + seg_len_mm * t_end;
                 double sub_mid_pos   = pos_mm + seg_len_mm * t_mid;
 
-                // Modulation values at sub-segment positions
-                double t_mod_start = modulator->compute(sub_start_pos, period_mm, phase_rad);
-                double t_mod_end   = modulator->compute(sub_end_pos,   period_mm, phase_rad);
-                double t_mod_mid   = modulator->compute(sub_mid_pos,   period_mm, phase_rad);
+                // Nominal (un-displaced) sub-segment endpoints
+                Vec2d base_start = a + (b - a) * t_start;
+                Vec2d base_end   = a + (b - a) * t_end;
+                Vec2d base_mid   = a + (b - a) * t_mid;
+
+                // Modulation values — use SPATIAL projection onto fill_dir.
+                // This makes all parallel lines in the layer synchronous:
+                // at any cross-section, every line sees the same t_mod,
+                // regardless of zigzag travel direction.
+                // (Taper still uses path-based pos_mm — distance from endpoint.)
+                const double sp_start = base_start.dot(fill_dir);
+                const double sp_end   = base_end.dot(fill_dir);
+                const double sp_mid   = base_mid.dot(fill_dir);
+                double t_mod_start = modulator->compute(sp_start, period_mm, phase_rad);
+                double t_mod_end   = modulator->compute(sp_end,   period_mm, phase_rad);
+                double t_mod_mid   = modulator->compute(sp_mid,   period_mm, phase_rad);
 
                 double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
 
@@ -238,10 +269,6 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // Must use base_mid (original trajectory), NOT the displaced point.
                 // Using a displaced point would make the gate check unreliable near walls:
                 // the displaced mid might land inside the zone even when the nominal is outside.
-                Vec2d base_start = a + (b - a) * t_start;
-                Vec2d base_end   = a + (b - a) * t_end;
-                Vec2d base_mid   = a + (b - a) * t_mid;
-
                 Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)),
                                   coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
 
