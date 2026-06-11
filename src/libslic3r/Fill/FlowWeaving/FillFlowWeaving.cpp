@@ -244,6 +244,20 @@ void FillFlowWeaving::fill_surface_extrusion(
                 double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
                 double z_end   = z_amp_frac * layer_h * t_mod_end   * taper_val * gate;
 
+                // Clamp z_diff so that print_z + z_diff >= MIN_SAFE_Z.
+                // GCode.cpp throws on z < 0.1mm; enforce the constraint here
+                // at the source rather than silently clamping in the generator.
+                constexpr double MIN_SAFE_Z = 0.1;  // mm
+                const double max_negative_z = -(this->z - MIN_SAFE_Z);
+                if (max_negative_z > 0) {
+                    // Layer is below or at MIN_SAFE_Z — disable Z modulation entirely.
+                    z_start = 0.0;
+                    z_end   = 0.0;
+                } else {
+                    z_start = std::max(z_start, max_negative_z);
+                    z_end   = std::max(z_end,   max_negative_z);
+                }
+
                 // ── Flow/width modulation ─────────────────────────────
                 // Line width varies with the sine.  Clamp between
                 // 25% of flow_width (minimum) and nozzle diameter (maximum).
