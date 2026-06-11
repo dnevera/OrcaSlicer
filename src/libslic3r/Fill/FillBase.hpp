@@ -144,6 +144,10 @@ public:
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;
+    // FlowWeaving: cross-layer safe zone (intersection of fill regions across Z-range)
+    ExPolygons  fw_safe_expolygons;
+    coordf_t    fw_ceiling_z { 0. };  // Z of the layer above (for Z-amplitude clamping)
+    coordf_t    fw_floor_z   { 0. };  // Z of the layer below
     bool dont_alternate_fill_direction = false;
 
     static float infill_anchor;

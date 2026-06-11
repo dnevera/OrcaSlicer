@@ -1334,6 +1334,28 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 		for (ExPolygon& expoly : surface_fill.expolygons) {
 
       f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
+
+            // === FlowWeaving: compute cross-layer safe zone ===
+            if (surface_fill.params.pattern == ipFlowWeaving) {
+                f->fw_safe_expolygons = f->no_overlap_expolygons;
+                f->fw_ceiling_z = this->print_z + this->height;
+                f->fw_floor_z   = this->print_z - this->height;
+                if (this->upper_layer) {
+                    ExPolygons upper_fill;
+                    for (const LayerRegion *lr : this->upper_layer->regions())
+                        append(upper_fill, lr->fill_no_overlap_expolygons);
+                    f->fw_safe_expolygons = intersection_ex(f->fw_safe_expolygons, upper_fill);
+                    f->fw_ceiling_z = this->upper_layer->print_z;
+                }
+                if (this->lower_layer) {
+                    ExPolygons lower_fill;
+                    for (const LayerRegion *lr : this->lower_layer->regions())
+                        append(lower_fill, lr->fill_no_overlap_expolygons);
+                    f->fw_safe_expolygons = intersection_ex(f->fw_safe_expolygons, lower_fill);
+                    f->fw_floor_z = this->lower_layer->print_z;
+                }
+            }
+
             if (params.symmetric_infill_y_axis) {
                 params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
                 expoly.symmetric_y(params.symmetric_y_axis);
@@ -1442,7 +1464,9 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(FillAdaptive::Oc
         case ipOctagramSpiral:
         case ipZigZag:
         case ipCrossZag:
-		case ipLockedZag: break;
+		case ipLockedZag:
+        case ipCrossHatch:
+        case ipFlowWeaving: break;
         }
 
         // Create the filler object.

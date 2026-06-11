@@ -311,9 +311,19 @@ private:
 class ExtrusionPathContoured : public ExtrusionPath {
 public:
     std::vector<double> z_diffs;
+    std::vector<double> flow_factors;  // per-segment XY flow multiplier (FlowWeaving)
 
+    // 3-arg ctor (ContourZ compatibility: no flow modulation)
     ExtrusionPathContoured(Polyline3 &&polyline, const ExtrusionPath &rhs, std::vector<double> &&z_diffs)
         : ExtrusionPath(std::move(polyline), rhs), z_diffs(std::move(z_diffs))
+    {}
+
+    // 4-arg ctor (FlowWeaving: Z offsets + XY flow factors)
+    ExtrusionPathContoured(Polyline3 &&polyline, const ExtrusionPath &rhs,
+                           std::vector<double> &&z_diffs, std::vector<double> &&flow_factors)
+        : ExtrusionPath(std::move(polyline), rhs),
+          z_diffs(std::move(z_diffs)),
+          flow_factors(std::move(flow_factors))
     {}
 
     virtual ExtrusionEntity *clone() const override;

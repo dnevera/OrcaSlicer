@@ -674,6 +674,8 @@ void ExtrusionPathContoured::simplify_by_fitting_arc(double tolerance) {
 void ExtrusionPathContoured::reverse() {
     this->polyline.reverse();
     std::reverse(this->z_diffs.begin(), this->z_diffs.end());
+    if (!this->flow_factors.empty())
+        std::reverse(this->flow_factors.begin(), this->flow_factors.end());
 }
 
 }

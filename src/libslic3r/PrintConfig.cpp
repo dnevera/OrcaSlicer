@@ -259,7 +259,8 @@ static t_config_enum_values s_keys_map_InfillPattern {
     { "concentric", ipConcentric },
     { "hilbertcurve", ipHilbertCurve },
     { "archimedeanchords", ipArchimedeanChords },
-    { "octagramspiral", ipOctagramSpiral }
+    { "octagramspiral", ipOctagramSpiral },
+    { "flowweaving",    ipFlowWeaving }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InfillPattern)
 
@@ -3194,6 +3195,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("hilbertcurve");
     def->enum_values.push_back("archimedeanchords");
     def->enum_values.push_back("octagramspiral");
+    def->enum_values.push_back("flowweaving");
     def->enum_labels.push_back(L("Rectilinear"));
     def->enum_labels.push_back(L("Aligned Rectilinear"));
     def->enum_labels.push_back(L("Zig Zag"));
@@ -3220,6 +3222,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Hilbert Curve"));
     def->enum_labels.push_back(L("Archimedean Chords"));
     def->enum_labels.push_back(L("Octagram Spiral"));
+    def->enum_labels.push_back(L("Flow Weaving"));
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
     def           = this->add("lateral_lattice_angle_1", coFloat);
@@ -3282,6 +3285,48 @@ void PrintConfigDef::init_fff_params()
     def->max      = 85;
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionFloat(45));
+
+    // === FlowWeaving infill ===
+    def           = this->add("flow_weaving_z_amplitude", coFloat);
+    def->label    = L("Z weaving amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Controls how far the nozzle deviates upward and downward during "
+                      "Flow Weaving infill, expressed as a percentage of the layer height.\n"
+                      "Higher values create stronger interlocking between adjacent layers "
+                      "but require more hardware precision.\n"
+                      "Recommended range: 20-50% for PLA/PETG, 10-30% for ABS/ASA.");
+    def->sidetext = L("% of layer height");
+    def->min      = 0;
+    def->max      = 95;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(30.0));
+
+    def           = this->add("flow_weaving_xy_amplitude", coFloat);
+    def->label    = L("XY weaving amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Controls the width modulation of Flow Weaving infill lines, "
+                      "expressed as a percentage of the base extrusion width.\n"
+                      "Higher values create stronger bonding at line intersections "
+                      "but may cause over-extrusion at peaks.\n"
+                      "Keep below 30% for reliable results.");
+    def->sidetext = L("% of line width");
+    def->min      = 0;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(15.0));
+
+    def           = this->add("flow_weaving_period", coFloat);
+    def->label    = L("Weaving period");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between consecutive weave peaks in millimeters.\n"
+                      "Shorter periods create tighter interlocking but may cause quality "
+                      "issues at high speeds.\n"
+                      "For most materials, 2-5mm produces the best strength/quality balance.");
+    def->sidetext = L("mm");
+    def->min      = 0.5;
+    def->max      = 20.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3.0));
 
     auto def_infill_anchor_min = def = this->add("infill_anchor", coFloatOrPercent);
     def->label = L("Sparse infill anchor length");
