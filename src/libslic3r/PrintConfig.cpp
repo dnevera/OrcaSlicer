@@ -4587,14 +4587,14 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("flow_weaving_xy_amplitude", coFloat);
     def->label    = L("XY width modulation");
     def->category = L("Strength");
-    def->tooltip  = L("Extrusion width variation as percentage of base width.\n"
-                      "Wider at peaks, narrower at troughs for interlock.\n"
-                      "Keep below 30%% for reliable results.");
+    def->tooltip  = L("Amplitude of line width modulation as percentage of flow width.\n"
+                      "Effective width is clamped between 25% of flow width and nozzle diameter.\n"
+                      "Also controls lateral path displacement.");
     def->sidetext = L("%");
     def->min      = 0;
-    def->max      = 50;
+    def->max      = 100;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(15.0));
+    def->set_default_value(new ConfigOptionFloat(50.0));
 
     def           = this->add("flow_weaving_period", coFloat);
     def->label    = L("Weaving period");

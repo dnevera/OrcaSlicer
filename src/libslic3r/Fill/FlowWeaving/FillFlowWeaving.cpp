@@ -37,7 +37,7 @@ namespace Slic3r {
 
 // ── Defaults (used when config keys are missing) ─────────────────────────────
 static constexpr double DEFAULT_Z_AMPLITUDE_PCT = 30.0;  // % of layer height
-static constexpr double DEFAULT_XY_AMPLITUDE    = 0.15;  // fraction (15%)
+static constexpr double DEFAULT_XY_AMPLITUDE    = 50.0;  // % of flow width
 static constexpr double DEFAULT_PERIOD_MM       = 3.0;   // mm per full wave
 static constexpr double DEFAULT_TAPER_FRACTION  = 0.15;  // 15% of line length each end
 
@@ -58,14 +58,16 @@ void FillFlowWeaving::fill_surface_extrusion(
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
             z_amp_pct = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_xy_amplitude"))
-            xy_amp = v->value / 100.0;
+            xy_amp = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_period"))
             period_mm = v->value;
     }
 
-    const double z_amp_frac = z_amp_pct / 100.0;
-    const double layer_h    = (params.layer_height > 0.0) ? params.layer_height
-                                                          : params.flow.height();
+    const double z_amp_frac  = z_amp_pct / 100.0;
+    const double xy_amp_frac = xy_amp / 100.0;
+    const double layer_h     = (params.layer_height > 0.0) ? params.layer_height
+                                                           : params.flow.height();
+    const double nozzle_d    = params.flow.nozzle_diameter();
 
     // ── 1. Base rectilinear polylines ────────────────────────────────────────
     Polylines polylines;
@@ -102,12 +104,17 @@ void FillFlowWeaving::fill_surface_extrusion(
     // poly_idx == line number is guaranteed without any angle/spacing math.
     const double layer_base_phase = (this->layer_id % 2 == 0) ? 0.0 : M_PI;
 
-    // Global perpendicular to the fill direction used for XY displacement.
-    // MUST be global (not per-segment) because rectilinear zigzag reverses
-    // travel direction on odd lines, which would flip per-segment perp and
-    // cancel the phase offset — resulting in all lines going the same way.
-    // global_perp = fill_dir rotated 90° CCW = (-sinθ, cosθ).
-    const Vec2d global_perp(-std::sin(this->angle), std::cos(this->angle));
+    // Global perpendicular to the ACTUAL fill direction (including layer rotation).
+    // this->angle is the base angle from config; _layer_angle() adds +90° on odd
+    // layers.  fill_surface() applies this rotation internally, so the output
+    // polylines already go in the rotated direction.  global_perp MUST match that
+    // rotated direction, otherwise the XY displacement ends up parallel to the
+    // fill lines (invisible) instead of perpendicular (visible wave).
+    const float fill_angle = this->angle
+        + ((this->layer_id != size_t(-1) && !this->fixed_angle && !this->dont_alternate_fill_direction)
+            ? this->_layer_angle(this->layer_id / surface->thickness_layers)
+            : 0.f);
+    const Vec2d global_perp(-std::sin(fill_angle), std::cos(fill_angle));
 
     // Sub-division step
     const int    n_sub   = this->subdivisions_per_period();
@@ -146,9 +153,8 @@ void FillFlowWeaving::fill_surface_extrusion(
 
         const double taper_len_mm = total_len_mm * DEFAULT_TAPER_FRACTION;
 
-        // Max lateral displacement: fraction of flow width
-        // xy_amp (e.g. 0.15) × flow_width gives ~15% lateral offset
-        const double lateral_amp_mm = xy_amp * flow_width;
+        // Lateral displacement amplitude = percentage of flow width
+        const double lateral_amp_mm = xy_amp_frac * flow_width;
 
         double pos_mm = 0.0;  // accumulated position along polyline
 
@@ -224,14 +230,13 @@ void FillFlowWeaving::fill_surface_extrusion(
                 double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
                 double z_end   = z_amp_frac * layer_h * t_mod_end   * taper_val * gate;
 
-                // ── Flow compensation for narrower/wider extrusion ────────
-                // When displaced sideways, effective width varies with cos(angle)
-                // but keep simple: extrusion tracks the displacement magnitude
-                double flow_factor = 1.0 + xy_amp * std::abs(t_mod_mid) * taper_val * gate;
-                flow_factor = std::max(0.5, std::min(1.5, flow_factor));
-
-                // ── Build sub-segment ExtrusionPathContoured ─────────────
-                double sub_mm3 = flow_mm3_per_mm * flow_factor;
+                // ── Flow/width modulation ─────────────────────────────
+                // Line width varies with the sine.  Clamp between
+                // 25% of flow_width (minimum) and nozzle diameter (maximum).
+                double width_delta = lateral_amp_mm * t_mod_mid * taper_val * gate;
+                double effective_width = std::clamp(flow_width + width_delta,
+                                                   flow_width * 0.25, (double)nozzle_d);
+                double sub_mm3 = flow_mm3_per_mm * (effective_width / flow_width);
 
                 ExtrusionPath base_path(params.extrusion_role, sub_mm3,
                                         float(flow_width), params.flow.height());
