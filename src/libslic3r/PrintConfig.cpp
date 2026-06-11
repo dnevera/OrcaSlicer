@@ -4596,6 +4596,19 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(50.0));
 
+    def           = this->add("flow_weaving_xy_path_amplitude", coFloat);
+    def->label    = L("XY path amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Lateral path displacement of the wave in mm.\n"
+                      "Controls how far the nozzle moves sideways.\n"
+                      "Independent of width modulation.\n"
+                      "Recommended: 0.1-0.3 mm.");
+    def->sidetext = L("mm");
+    def->min      = 0;
+    def->max      = 1.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.2));
+
     def           = this->add("flow_weaving_period", coFloat);
     def->label    = L("Weaving period");
     def->category = L("Strength");

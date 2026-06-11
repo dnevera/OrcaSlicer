@@ -1299,6 +1299,7 @@ static std::vector<std::string> s_Preset_print_options{
     // FlowWeaving
     "flow_weaving_z_amplitude",
     "flow_weaving_xy_amplitude",
+    "flow_weaving_xy_path_amplitude",
     "flow_weaving_period",
     "ironing_expansion",
 };

@@ -1398,6 +1398,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // FlowWeaving infill parameters
     ((ConfigOptionFloat, flow_weaving_z_amplitude))
     ((ConfigOptionFloat, flow_weaving_xy_amplitude))
+    ((ConfigOptionFloat, flow_weaving_xy_path_amplitude))
     ((ConfigOptionFloat, flow_weaving_period))
     )
 

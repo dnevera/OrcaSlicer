@@ -37,9 +37,10 @@ namespace Slic3r {
 
 // ── Defaults (used when config keys are missing) ─────────────────────────────
 static constexpr double DEFAULT_Z_AMPLITUDE_PCT = 30.0;  // % of layer height
-static constexpr double DEFAULT_XY_AMPLITUDE    = 50.0;  // % of flow width
-static constexpr double DEFAULT_PERIOD_MM       = 3.0;   // mm per full wave
-static constexpr double DEFAULT_TAPER_FRACTION  = 0.15;  // 15% of line length each end
+static constexpr double DEFAULT_XY_AMPLITUDE       = 50.0;  // % of flow width (width modulation)
+static constexpr double DEFAULT_XY_PATH_AMPLITUDE   = 0.2;   // mm lateral path displacement
+static constexpr double DEFAULT_PERIOD_MM           = 3.0;   // mm per full wave
+static constexpr double DEFAULT_TAPER_MM            = 1.5;   // mm absolute taper near walls
 
 void FillFlowWeaving::fill_surface_extrusion(
     const Surface*          surface,
@@ -50,15 +51,18 @@ void FillFlowWeaving::fill_surface_extrusion(
     // flow_weaving_* live in PrintRegionConfig (Process settings).
     // params.config already merges global process profile + per-object overrides.
     // Using virtual option<>() instead of static_cast for safety.
-    double z_amp_pct = DEFAULT_Z_AMPLITUDE_PCT;
-    double xy_amp    = DEFAULT_XY_AMPLITUDE;
-    double period_mm = DEFAULT_PERIOD_MM;
+    double z_amp_pct      = DEFAULT_Z_AMPLITUDE_PCT;
+    double xy_amp         = DEFAULT_XY_AMPLITUDE;
+    double xy_path_amp_mm = DEFAULT_XY_PATH_AMPLITUDE;
+    double period_mm      = DEFAULT_PERIOD_MM;
 
     if (params.config) {
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
             z_amp_pct = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_xy_amplitude"))
             xy_amp = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_xy_path_amplitude"))
+            xy_path_amp_mm = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_period"))
             period_mm = v->value;
     }
@@ -151,10 +155,13 @@ void FillFlowWeaving::fill_surface_extrusion(
         if (total_len_mm < 1e-6)
             continue;
 
-        const double taper_len_mm = total_len_mm * DEFAULT_TAPER_FRACTION;
+        // Taper: fixed absolute distance from wall (line endpoints)
+        const double taper_len_mm = DEFAULT_TAPER_MM;
 
-        // Lateral displacement amplitude = percentage of flow width
-        const double lateral_amp_mm = xy_amp_frac * flow_width;
+        // Path displacement: absolute mm from config
+        const double lateral_amp_mm = xy_path_amp_mm;
+        // Width modulation: percentage of flow width
+        const double width_amp_mm   = xy_amp_frac * flow_width;
 
         double pos_mm = 0.0;  // accumulated position along polyline
 
@@ -233,7 +240,7 @@ void FillFlowWeaving::fill_surface_extrusion(
                 // ── Flow/width modulation ─────────────────────────────
                 // Line width varies with the sine.  Clamp between
                 // 25% of flow_width (minimum) and nozzle diameter (maximum).
-                double width_delta = lateral_amp_mm * t_mod_mid * taper_val * gate;
+                double width_delta = width_amp_mm * t_mod_mid * taper_val * gate;
                 double effective_width = std::clamp(flow_width + width_delta,
                                                    flow_width * 0.25, (double)nozzle_d);
                 double sub_mm3 = flow_mm3_per_mm * (effective_width / flow_width);

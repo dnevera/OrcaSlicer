@@ -2508,6 +2508,7 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Flow weaving"), L"param_flowweaving_group");
         optgroup->append_single_option_line("flow_weaving_z_amplitude");
         optgroup->append_single_option_line("flow_weaving_xy_amplitude");
+        optgroup->append_single_option_line("flow_weaving_xy_path_amplitude");
         optgroup->append_single_option_line("flow_weaving_period");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
