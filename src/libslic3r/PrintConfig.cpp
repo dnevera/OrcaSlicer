@@ -4649,6 +4649,21 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(25));
 
+    def           = this->add("flow_weaving_top_taper_layers", coInt);
+    def->label    = L("Top surface taper layers");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of infill layers below the top surface over which the upward Z-amplitude\n"
+                      "is smoothly tapered to zero.\n"
+                      "Prevents the nozzle from protruding into the top solid shell.\n"
+                      "0 = no taper (nozzle may go above the top infill layer).\n"
+                      "3 = smooth taper over 3 layers (recommended).\n"
+                      "Taper follows smoothstep: slow at start, fast in middle, slow at end.");
+    def->sidetext = L("layers");
+    def->min      = 0;
+    def->max      = 10;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(3));
+
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
     def->category = L("Quality");

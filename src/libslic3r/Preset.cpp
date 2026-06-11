@@ -1303,6 +1303,7 @@ static std::vector<std::string> s_Preset_print_options{
     "flow_weaving_period",
     "flow_weaving_phase_offset",
     "flow_weaving_z_overlap",
+    "flow_weaving_top_taper_layers",
     "ironing_expansion",
 };
 

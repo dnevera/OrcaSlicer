@@ -1363,6 +1363,20 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                     for (const LayerRegion* lr : layers[layer_idx - 1]->regions())
                         append(f->no_overlap_below, lr->fill_no_overlap_expolygons);
                 }
+                // Count consecutive infill layers above (for FlowWeaving top-surface taper).
+                {
+                    int above_count = 0;
+                    constexpr int MAX_TAPER_LOOK = 10;
+                    for (size_t li = layer_idx + 1;
+                         li < layers.size() && above_count < MAX_TAPER_LOOK; ++li) {
+                        bool has_infill = false;
+                        for (const LayerRegion* lr : layers[li]->regions())
+                            if (!lr->fill_no_overlap_expolygons.empty()) { has_infill = true; break; }
+                        if (!has_infill) break;
+                        ++above_count;
+                    }
+                    f->infill_layers_above = above_count;
+                }
             }
 
             if (params.symmetric_infill_y_axis) {

@@ -149,6 +149,9 @@ public:
     // only when needs_cross_layer_data() returns true.
     ExPolygons  no_overlap_above;
     ExPolygons  no_overlap_below;
+    // Number of consecutive infill layers above this one (for top-surface taper).
+    // Populated by make_fills() when needs_cross_layer_data() returns true.
+    int         infill_layers_above = 0;
     bool dont_alternate_fill_direction = false;
 
     static float infill_anchor;

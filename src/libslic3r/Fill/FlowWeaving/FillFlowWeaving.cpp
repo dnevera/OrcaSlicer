@@ -250,6 +250,22 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 z_start = std::max(z_start, min_z_diff);
                 z_end   = std::max(z_end,   min_z_diff);
 
+                // Upper taper near top surface.
+                // Smoothly reduces upward z_diff to 0 over the last N infill layers
+                // so the nozzle doesn't protrude into the top solid shell.
+                const int top_taper_n = params.config->flow_weaving_top_taper_layers.value;
+                if (top_taper_n > 0) {
+                    // x ∈ [0, 1]: 0 = at top infill layer, 1 = far from top
+                    const double x = std::min(static_cast<double>(this->infill_layers_above)
+                                              / static_cast<double>(top_taper_n), 1.0);
+                    // Smoothstep: f(x) = 3x² - 2x³  (0 at x=0, 1 at x=1)
+                    const double upper_taper = x * x * (3.0 - 2.0 * x);
+                    // Only cap the positive (upward) part of z_diff.
+                    const double max_z_up = z_amp_frac * layer_h * upper_taper;
+                    z_start = std::min(z_start, max_z_up);
+                    z_end   = std::min(z_end,   max_z_up);
+                }
+
                 // ── Flow/width modulation ─────────────────────────────
                 // Line width varies with the sine.  Clamp between
                 // 25% of flow_width (minimum) and nozzle diameter (maximum).

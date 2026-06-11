@@ -1402,6 +1402,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, flow_weaving_period))
     ((ConfigOptionFloat, flow_weaving_phase_offset))
     ((ConfigOptionFloat, flow_weaving_z_overlap))
+    ((ConfigOptionInt,   flow_weaving_top_taper_layers))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(
