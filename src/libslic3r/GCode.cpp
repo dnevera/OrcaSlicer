@@ -7537,9 +7537,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                         double e = dE * extrusion_ratio;
 
                         double z = m_nominal_z + z_diff;
-                        if (z < 0.1) {
-                            throw RuntimeError("GCode: very low z");
-                        }
+                        if (z < 0.01) z = 0.01;
                         gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), z), e,
                                                          GCodeWriter::full_gcode_comment ? tempDescription : "");
 
@@ -7744,9 +7742,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 double e = dE * extrusion_ratio;
 
                 double z = m_nominal_z + z_diff;
-                if (z < 0.1) {
-                    throw RuntimeError("GCode: very low z");
-                }
+                if (z < 0.01) z = 0.01;
                 gcode += m_writer.extrude_to_xyz(Vec3d(dest2d.x(), dest2d.y(), z), e,
                                                  GCodeWriter::full_gcode_comment ? tempDescription : "");
             } else if (sloped == nullptr) {

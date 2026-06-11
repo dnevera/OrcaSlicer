@@ -259,7 +259,8 @@ static t_config_enum_values s_keys_map_InfillPattern {
     { "concentric", ipConcentric },
     { "hilbertcurve", ipHilbertCurve },
     { "archimedeanchords", ipArchimedeanChords },
-    { "octagramspiral", ipOctagramSpiral }
+    { "octagramspiral", ipOctagramSpiral },
+    { "flowweaving",    ipFlowWeaving },
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(InfillPattern)
 
@@ -3194,6 +3195,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_values.push_back("hilbertcurve");
     def->enum_values.push_back("archimedeanchords");
     def->enum_values.push_back("octagramspiral");
+    def->enum_values.push_back("flowweaving");
     def->enum_labels.push_back(L("Rectilinear"));
     def->enum_labels.push_back(L("Aligned Rectilinear"));
     def->enum_labels.push_back(L("Zig Zag"));
@@ -3220,6 +3222,7 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back(L("Hilbert Curve"));
     def->enum_labels.push_back(L("Archimedean Chords"));
     def->enum_labels.push_back(L("Octagram Spiral"));
+    def->enum_labels.push_back(L("Flow Weaving"));
     def->set_default_value(new ConfigOptionEnum<InfillPattern>(ipCrossHatch));
 
     def           = this->add("lateral_lattice_angle_1", coFloat);
@@ -4567,6 +4570,43 @@ void PrintConfigDef::init_fff_params()
     def->tooltip  = L("Disable alternating fill direction when using Z contouring.");
     def->mode     = comExpert;
     def->set_default_value(new ConfigOptionBool(false));
+
+    // === FlowWeaving infill ===
+    def           = this->add("flow_weaving_z_amplitude", coFloat);
+    def->label    = L("Z weaving amplitude");
+    def->category = L("Strength");
+    def->tooltip  = L("Height of Z oscillation as percentage of layer height.\n"
+                      "Higher = stronger interlocking, but needs precise Z axis.\n"
+                      "Recommended: 20-50%% PLA/PETG, 10-30%% ABS/ASA.");
+    def->sidetext = L("%");
+    def->min      = 0;
+    def->max      = 95;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(30.0));
+
+    def           = this->add("flow_weaving_xy_amplitude", coFloat);
+    def->label    = L("XY width modulation");
+    def->category = L("Strength");
+    def->tooltip  = L("Extrusion width variation as percentage of base width.\n"
+                      "Wider at peaks, narrower at troughs for interlock.\n"
+                      "Keep below 30%% for reliable results.");
+    def->sidetext = L("%");
+    def->min      = 0;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(15.0));
+
+    def           = this->add("flow_weaving_period", coFloat);
+    def->label    = L("Weaving period");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between wave peaks in mm.\n"
+                      "Shorter = tighter interlocking but may cause artifacts.\n"
+                      "2-5mm works best for most materials.");
+    def->sidetext = L("mm");
+    def->min      = 0.5;
+    def->max      = 20.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3.0));
 
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");

@@ -1334,6 +1334,27 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 		for (ExPolygon& expoly : surface_fill.expolygons) {
 
       f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
+
+            // FlowWeaving: tighten safe zone by intersecting with adjacent layers
+            if (surface_fill.params.pattern == ipFlowWeaving) {
+                ExPolygons safe = f->no_overlap_expolygons;
+                const size_t layer_idx = this->id();
+                const auto& layers = this->object()->layers();
+                if (layer_idx + 1 < layers.size()) {
+                    ExPolygons upper;
+                    for (const LayerRegion* lr : layers[layer_idx + 1]->regions())
+                        append(upper, lr->fill_no_overlap_expolygons);
+                    safe = intersection_ex(safe, upper);
+                }
+                if (layer_idx > 0) {
+                    ExPolygons lower;
+                    for (const LayerRegion* lr : layers[layer_idx - 1]->regions())
+                        append(lower, lr->fill_no_overlap_expolygons);
+                    safe = intersection_ex(safe, lower);
+                }
+                f->no_overlap_expolygons = std::move(safe);
+            }
+
             if (params.symmetric_infill_y_axis) {
                 params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
                 expoly.symmetric_y(params.symmetric_y_axis);
@@ -1443,6 +1464,7 @@ Polylines Layer::generate_sparse_infill_polylines_for_anchoring(FillAdaptive::Oc
         case ipZigZag:
         case ipCrossZag:
 		case ipLockedZag: break;
+		case ipFlowWeaving: break;
         }
 
         // Create the filler object.

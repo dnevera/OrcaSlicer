@@ -158,6 +158,8 @@ set(lisbslic3r_sources
     Fill/Fill.hpp
     Fill/FillLightning.cpp
     Fill/FillLightning.hpp
+    Fill/FlowWeaving/FillFlowWeaving.hpp
+    Fill/FlowWeaving/FillFlowWeaving.cpp
     Fill/FillLine.cpp
     Fill/FillLine.hpp
     Fill/FillPlanePath.cpp
