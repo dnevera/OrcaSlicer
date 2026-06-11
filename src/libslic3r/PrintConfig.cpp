@@ -4634,6 +4634,20 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.2));
 
+    def           = this->add("flow_weaving_z_phase_offset", coFloat);
+    def->label    = L("Z layer phase offset");
+    def->category = L("Strength");
+    def->tooltip  = L("Phase shift of the Z modulation wave between same-direction layers.\n"
+                      "Controls Z interlocking strategy, independent of XY.\n"
+                      "0.0 = trough-into-trough (recommended, no pressure accumulation).\n"
+                      "0.5 = anti-phase: every 2nd same-direction layer inverted.\n"
+                      "0.2 = progressive 20% shift per same-direction layer pair.");
+    def->sidetext = L("×period");
+    def->min      = 0;
+    def->max      = 1.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def           = this->add("flow_weaving_z_overlap", coFloat);
     def->label    = L("Z overlap into previous layer");
     def->category = L("Strength");

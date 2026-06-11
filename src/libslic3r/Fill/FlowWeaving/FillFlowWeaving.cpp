@@ -43,7 +43,6 @@ static constexpr double DEFAULT_PERIOD_MM         = 0.5;  // mm per full wave
 static constexpr double DEFAULT_PHASE_OFFSET      = 0.2;  // fraction of period (0-1)
 static constexpr double DEFAULT_TAPER_MM          = 1.5;  // mm absolute taper near walls
 
-
 void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out)
 {
     // ── 0. Read config ───────────────────────────────────────────────────────
@@ -54,7 +53,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     double xy_amp         = DEFAULT_XY_AMPLITUDE;
     double xy_path_amp_mm = DEFAULT_XY_PATH_AMPLITUDE;
     double period_mm      = DEFAULT_PERIOD_MM;
-    double phase_offset   = DEFAULT_PHASE_OFFSET;
+    double phase_offset   = DEFAULT_PHASE_OFFSET;   // XY wave phase between layers
+    double z_phase_offset = 0.0;                    // Z wave phase between layers
 
     if (params.config) {
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
@@ -67,6 +67,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             period_mm = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_phase_offset"))
             phase_offset = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_phase_offset"))
+            z_phase_offset = v->value;
     }
 
     const double z_amp_frac  = z_amp_pct / 100.0;
@@ -103,13 +105,24 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     // Base phase: layers alternate fill direction every layer (0°, 90°, 0°, 90°, ...).
     // Same-direction layers are: 0,2,4,... (set A) and 1,3,5,... (set B).
     // Within each set, apply progressive phase_offset so that waves shift
-    // between layers sharing the same direction → better interlocking.
+    // between layers sharing the same direction.
     //
-    // same_dir_idx = layer_id / 2  (how many same-direction layers came before)
-    // layer_base_phase = π for odd layers (antiphase vs even layers)
-    //                  + same_dir_idx × phase_offset × 2π  (progressive shift)
-    const size_t same_dir_idx     = this->layer_id / 2;
-    const double layer_base_phase = ((this->layer_id % 2 == 0) ? 0.0 : M_PI) + same_dir_idx * phase_offset * 2.0 * M_PI;
+    // Interlocking strategy: TROUGH INTO TROUGH
+    //   same_dir_idx × phase_offset × 2π controls the progressive shift.
+    //   No π-alternation between layers → troughs of layer N align with
+    //   troughs of layer N+1: the nozzle physically dips into the valleys
+    //   left by the previous layer's wave → mechanical Z-interlocking.
+    //
+    //   phase_offset = 0 → perfect trough-into-trough (maximum depth)
+    //   phase_offset > 0 → gradual shift per same-direction layer pair
+    const size_t same_dir_idx      = this->layer_id / 2;
+    // XY and Z phases are INDEPENDENT:
+    //   phase_offset   → XY displacement wave (visual pattern between layers)
+    //   z_phase_offset → Z wave interlocking strategy
+    //     0.0 = trough-into-trough (nozzle dips at previous layer's valley positions)
+    //     0.5 = anti-phase (nozzle dips where previous layer peaked)
+    const double xy_phase_rad = same_dir_idx * phase_offset   * 2.0 * M_PI;
+    const double z_phase_rad  = same_dir_idx * z_phase_offset * 2.0 * M_PI;
 
     // Global perpendicular to the ACTUAL fill direction (including layer rotation).
     // this->angle is the base angle from config; _layer_angle() adds +90° on odd
@@ -162,41 +175,30 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         // This ensures the top surface is free of Z-wave artifacts even at
         // short periods (0.5mm) where Z-ripples telegraph through thin top shells.
         const int top_taper_n = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
-        double taper_scale = 1.0;
+        double taper_scale    = 1.0;
         if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
             // Hard disable: last top_taper_n infill layers print flat
             taper_scale = 0.0;
         } else if (top_taper_n > 0) {
             // Smooth fade starting above the hard-cutoff zone.
             // x=0 at ia=top_taper_n, x=1 at ia=2*top_taper_n
-            const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1)
-                                      / static_cast<double>(top_taper_n), 1.0);
-            taper_scale = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
+            const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1) / static_cast<double>(top_taper_n),
+                                      1.0);
+            taper_scale    = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
         }
-
 
         // Upper bound: max upward Z offset (zero on last 2 layers)
         const double max_z_up = z_amp_frac * layer_h * taper_scale;
 
         // Lower bound: nozzle may not dip more than z_overlap% of layer_h below nominal.
         // Tapered by the same scale → zero on last 2 layers, full overlap far from top.
-        const double z_overlap_pct      = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
-        const double overlap_tapered    = -(layer_h * z_overlap_pct / 100.0) * taper_scale;
+        const double z_overlap_pct   = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
+        const double overlap_tapered = -(layer_h * z_overlap_pct / 100.0) * taper_scale;
         // Absolute floor: nozzle must never go below the first layer surface.
-        const double first_layer_h      = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
-        const double absolute_floor     = -(this->z - first_layer_h);
+        const double first_layer_h  = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
+        const double absolute_floor = -(this->z - first_layer_h);
         // Most restrictive (least negative) of the two lower limits.
-        const double min_z_diff         = std::max(overlap_tapered, absolute_floor);
-
-
-        // All lines within the same layer share the same phase (synchronous).
-        // This maximises intra-layer adhesion: adjacent lines bond along their
-        // full side surfaces rather than meeting only at peak tips (antiphase).
-        //
-        // Inter-layer interlocking is still achieved via layer_base_phase,
-        // which alternates by π between consecutive layers.
-        const double phase_rad = layer_base_phase;
-
+        const double min_z_diff = std::max(overlap_tapered, absolute_floor);
 
         // Measure total path length (mm) for taper
         double total_len_mm = 0.0;
@@ -251,17 +253,19 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 Vec2d base_end   = a + (b - a) * t_end;
                 Vec2d base_mid   = a + (b - a) * t_mid;
 
-                // Modulation values — use SPATIAL projection onto fill_dir.
-                // This makes all parallel lines in the layer synchronous:
-                // at any cross-section, every line sees the same t_mod,
-                // regardless of zigzag travel direction.
-                // (Taper still uses path-based pos_mm — distance from endpoint.)
+                // Modulation — spatial projection onto fill_dir (same for all
+                // parallel lines regardless of zigzag direction).
+                // Z and XY use SEPARATE phases for independent control.
                 const double sp_start = base_start.dot(fill_dir);
                 const double sp_end   = base_end.dot(fill_dir);
                 const double sp_mid   = base_mid.dot(fill_dir);
-                double t_mod_start = modulator->compute(sp_start, period_mm, phase_rad);
-                double t_mod_end   = modulator->compute(sp_end,   period_mm, phase_rad);
-                double t_mod_mid   = modulator->compute(sp_mid,   period_mm, phase_rad);
+                // Z phase: controls inter-layer interlocking depth/alignment
+                const double t_mod_z_start = modulator->compute(sp_start, period_mm, z_phase_rad);
+                const double t_mod_z_end   = modulator->compute(sp_end,   period_mm, z_phase_rad);
+                // XY phase: controls lateral displacement wave pattern
+                const double t_mod_start   = modulator->compute(sp_start, period_mm, xy_phase_rad);
+                const double t_mod_end     = modulator->compute(sp_end,   period_mm, xy_phase_rad);
+                const double t_mod_mid     = modulator->compute(sp_mid,   period_mm, xy_phase_rad);
 
                 double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
 
@@ -269,8 +273,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // Must use base_mid (original trajectory), NOT the displaced point.
                 // Using a displaced point would make the gate check unreliable near walls:
                 // the displaced mid might land inside the zone even when the nominal is outside.
-                Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)),
-                                  coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
+                Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)), coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
 
                 double gate = 1.0;
                 if (have_safe_zone) {
@@ -288,28 +291,27 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // This prevents the nozzle from physically entering the perimeter wall
                 // even when Z and flow modulation are suppressed by the gate.
                 double xy_off_start = lateral_amp_mm * t_mod_start * taper_val * gate;
-                double xy_off_end   = lateral_amp_mm * t_mod_end   * taper_val * gate;
+                double xy_off_end   = lateral_amp_mm * t_mod_end * taper_val * gate;
 
                 Vec2d disp_start = base_start + global_perp * xy_off_start;
-                Vec2d disp_end   = base_end   + global_perp * xy_off_end;
+                Vec2d disp_end   = base_end + global_perp * xy_off_end;
 
                 // Convert to scaled integer coords
-                Point pt_start(coord_t(std::round(disp_start.x() / SCALING_FACTOR)),
-                               coord_t(std::round(disp_start.y() / SCALING_FACTOR)));
-                Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)),
-                             coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
+                Point pt_start(coord_t(std::round(disp_start.x() / SCALING_FACTOR)), coord_t(std::round(disp_start.y() / SCALING_FACTOR)));
+                Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)), coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
 
-                // ── Z modulation ──────────────────────────────────────────
-                double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
-                double z_end   = z_amp_frac * layer_h * t_mod_end   * taper_val * gate;
+                // ── Z modulation (uses Z-specific phase, independent of XY) ──
+                double z_start = z_amp_frac * layer_h * t_mod_z_start * taper_val * gate;
+                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * taper_val * gate;
+
 
                 // Apply lower bound (max of two negative limits = shallower dip wins)
                 z_start = std::max(z_start, min_z_diff);
-                z_end   = std::max(z_end,   min_z_diff);
+                z_end   = std::max(z_end, min_z_diff);
 
                 // Apply upper bound (smoothstep fade near top shell)
                 z_start = std::min(z_start, max_z_up);
-                z_end   = std::min(z_end,   max_z_up);
+                z_end   = std::min(z_end, max_z_up);
 
                 // ── Flow ──────────────────────────────────────────────────
                 // Constant nominal flow for now — no width or Z-coupled
@@ -317,8 +319,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // will be re-introduced once Z-wave print quality is confirmed.
                 const double sub_mm3 = flow_mm3_per_mm;
 
-                ExtrusionPath base_path(params.extrusion_role, sub_mm3,
-                                        float(flow_width), params.flow.height());
+                ExtrusionPath base_path(params.extrusion_role, sub_mm3, float(flow_width), params.flow.height());
 
                 base_path.z_contoured = true;
 

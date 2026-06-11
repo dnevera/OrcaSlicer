@@ -2511,6 +2511,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("flow_weaving_xy_path_amplitude");
         optgroup->append_single_option_line("flow_weaving_period");
         optgroup->append_single_option_line("flow_weaving_phase_offset");
+        optgroup->append_single_option_line("flow_weaving_z_phase_offset");
         optgroup->append_single_option_line("flow_weaving_z_overlap");
         optgroup->append_single_option_line("flow_weaving_top_taper_layers");
 

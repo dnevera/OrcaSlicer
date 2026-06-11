@@ -150,6 +150,7 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
        {"flow_weaving_xy_path_amplitude", "", 1},
        {"flow_weaving_period", "", 1},
        {"flow_weaving_phase_offset", "", 1},
+       {"flow_weaving_z_phase_offset", "", 1},
        {"flow_weaving_z_overlap", "", 1},
        {"flow_weaving_top_taper_layers", "", 1}}},
      {L("Speed"),

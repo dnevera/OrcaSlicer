@@ -647,7 +647,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     // FlowWeaving infill — show parameters only when pattern is FlowWeaving
     bool is_flow_weaving = pattern == ipFlowWeaving;
-    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers" })
+    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers" })
         toggle_line(el, is_flow_weaving);
 
     bool has_spiral_vase         = config->opt_bool("spiral_mode");
@@ -993,7 +993,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     bool flow_weaving_options =
         config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipFlowWeaving;
-    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers" })
+    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers" })
         toggle_line(el, flow_weaving_options);
         
     // Adaptative Cubic and support cubic infill patterns do not support infill rotation.
