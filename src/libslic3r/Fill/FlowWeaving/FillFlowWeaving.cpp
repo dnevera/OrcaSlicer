@@ -238,11 +238,17 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
                 double z_end   = z_amp_frac * layer_h * t_mod_end * taper_val * gate;
 
-                // Safety: nozzle must not descend below the first layer surface.
-                const double first_layer_h = this->print_config->initial_layer_print_height.value;
-                const double min_z_diff = -(this->z - first_layer_h);
+                // Safety: two-level lower bound for z_diff.
+                // 1) User overlap: nozzle may press at most (z_overlap% × layer_h) into previous layer.
+                const double z_overlap_pct = params.config->flow_weaving_z_overlap.value;
+                const double overlap_limit  = -(layer_h * z_overlap_pct / 100.0);
+                // 2) Absolute floor: nozzle must never descend below the first layer surface.
+                const double first_layer_h  = this->print_config->initial_layer_print_height.value;
+                const double absolute_floor = -(this->z - first_layer_h);
+                // Apply the less restrictive of the two (max of two negative values = shallower dip).
+                const double min_z_diff = std::max(overlap_limit, absolute_floor);
                 z_start = std::max(z_start, min_z_diff);
-                z_end   = std::max(z_end, min_z_diff);
+                z_end   = std::max(z_end,   min_z_diff);
 
                 // ── Flow/width modulation ─────────────────────────────
                 // Line width varies with the sine.  Clamp between

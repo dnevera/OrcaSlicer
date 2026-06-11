@@ -4634,6 +4634,21 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.5));
 
+    def           = this->add("flow_weaving_z_overlap", coFloat);
+    def->label    = L("Z overlap into previous layer");
+    def->category = L("Strength");
+    def->tooltip  = L("How far the nozzle may press into the previous layer during Z-modulation,\n"
+                      "expressed as a percentage of the layer height.\n"
+                      "A small overlap improves interlayer bonding by re-melting the surface below.\n"
+                      "0 = nozzle stays at or above the previous layer top.\n"
+                      "25 = nozzle may dip 25% of layer_h into the previous layer (recommended).\n"
+                      "50 = nozzle may dip halfway into the previous layer (aggressive).");
+    def->sidetext = L("% of layer height");
+    def->min      = 0;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(25));
+
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
     def->category = L("Quality");
