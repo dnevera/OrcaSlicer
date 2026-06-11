@@ -43,6 +43,25 @@ static constexpr double DEFAULT_PERIOD_MM         = 0.5;  // mm per full wave
 static constexpr double DEFAULT_PHASE_OFFSET      = 0.2;  // fraction of period (0-1)
 static constexpr double DEFAULT_TAPER_MM          = 1.5;  // mm absolute taper near walls
 
+// Minimum distance from a point to the nearest edge of ExPolygons boundary (mm).
+// Used to clamp width/displacement so the physical line edge stays inside walls.
+static double min_dist_to_boundary_mm(const Point& pt, const ExPolygons& expolys)
+{
+    double min_dist_scaled = 1e18;
+    auto check_ring = [&](const Points& pts) {
+        for (size_t i = 0, n = pts.size(); i < n; ++i) {
+            double d = Line(pts[i], pts[(i + 1) % n]).distance_to(pt);
+            if (d < min_dist_scaled) min_dist_scaled = d;
+        }
+    };
+    for (const ExPolygon& ep : expolys) {
+        check_ring(ep.contour.points);
+        for (const Polygon& hole : ep.holes)
+            check_ring(hole.points);
+    }
+    return unscale<double>(min_dist_scaled);
+}
+
 void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillParams& params, ExtrusionEntitiesPtr& out)
 {
     // ── 0. Read config ───────────────────────────────────────────────────────
@@ -216,8 +235,6 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
         // Path displacement: absolute mm from config
         const double lateral_amp_mm = xy_path_amp_mm;
-        // Width modulation: percentage of flow width
-        const double width_amp_mm = xy_amp_frac * flow_width;
 
         double pos_mm = 0.0; // accumulated position along polyline
 
@@ -286,12 +303,34 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                     }
                 }
 
-                // ── XY lateral displacement ───────────────────────────────
-                // Gate is applied here: when gate=0 (outside safe zone), no XY shift.
-                // This prevents the nozzle from physically entering the perimeter wall
-                // even when Z and flow modulation are suppressed by the gate.
+                // ── Wall-distance clamping ─────────────────────────────────
+                // Distance from nominal midpoint to nearest wall boundary (mm).
+                // Clamps width expansion + lateral displacement so the physical
+                // edge of the extruded line never exceeds the wall.
+                double dist_to_wall_mm = 1e18;
+                if (gate > 0.0 && !this->no_overlap_expolygons.empty())
+                    dist_to_wall_mm = min_dist_to_boundary_mm(base_mid_pt, this->no_overlap_expolygons);
+
+                // ── Width modulation (clamped to wall) ────────────────────
+                double width_mod = 1.0;
+                if (gate > 0.0 && xy_amp_frac > 0.0) {
+                    width_mod = 1.0 + xy_amp_frac * t_mod_mid * taper_val;
+                    // Only clamp EXPANSION beyond nominal — never shrink below 1.0.
+                    // Nominal half-width may already exceed dist_to_wall (normal
+                    // perimeter overlap), so we only limit the EXTRA width.
+                    // max_expansion = how much further the edge can go beyond nominal
+                    double max_expansion_mm = std::max(0.0, dist_to_wall_mm - flow_width * 0.5);
+                    double max_mod = 1.0 + 2.0 * max_expansion_mm / flow_width;
+                    width_mod = std::max(1.0 - xy_amp_frac, std::min(width_mod, max_mod));
+                }
+
+                // ── XY lateral displacement (clamped to wall) ─────────────
                 double xy_off_start = lateral_amp_mm * t_mod_start * taper_val * gate;
-                double xy_off_end   = lateral_amp_mm * t_mod_end * taper_val * gate;
+                double xy_off_end   = lateral_amp_mm * t_mod_end   * taper_val * gate;
+                // Center + half_width must stay inside wall boundary
+                double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5);
+                xy_off_start = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
+                xy_off_end   = std::max(-max_lateral, std::min(xy_off_end,   max_lateral));
 
                 Vec2d disp_start = base_start + global_perp * xy_off_start;
                 Vec2d disp_end   = base_end + global_perp * xy_off_end;
@@ -313,13 +352,11 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 z_start = std::min(z_start, max_z_up);
                 z_end   = std::min(z_end, max_z_up);
 
-                // ── Flow ──────────────────────────────────────────────────
-                // Constant nominal flow for now — no width or Z-coupled
-                // modulation.  Flow modulation (height-based or width-based)
-                // will be re-introduced once Z-wave print quality is confirmed.
-                const double sub_mm3 = flow_mm3_per_mm;
+                // ── Flow (width-modulated) ─────────────────────────────
+                const double sub_mm3  = flow_mm3_per_mm * width_mod;
+                const float  mod_width = float(flow_width * width_mod);
 
-                ExtrusionPath base_path(params.extrusion_role, sub_mm3, float(flow_width), params.flow.height());
+                ExtrusionPath base_path(params.extrusion_role, sub_mm3, mod_width, params.flow.height());
 
                 base_path.z_contoured = true;
 
