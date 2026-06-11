@@ -142,6 +142,25 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         if (pl.size() < 2)
             continue;
 
+        // ── Safety bounds (constant per polyline, read once) ─────────────────
+        // Lower: nozzle may not dip more than z_overlap% of layer_h below nominal.
+        const double z_overlap_pct = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
+        const double overlap_limit  = -(layer_h * z_overlap_pct / 100.0);
+        // Absolute floor: nozzle must never go below the first layer surface.
+        const double first_layer_h  = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
+        const double absolute_floor = -(this->z - first_layer_h);
+        const double min_z_diff     = std::max(overlap_limit, absolute_floor);
+
+        // Upper: smoothstep fade of upward amplitude near top solid shell.
+        const int top_taper_n = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
+        double max_z_up = z_amp_frac * layer_h; // unrestricted by default
+        if (top_taper_n > 0) {
+            const double x       = std::min(static_cast<double>(this->infill_layers_above)
+                                            / static_cast<double>(top_taper_n), 1.0);
+            const double s       = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0,1]
+            max_z_up             = z_amp_frac * layer_h * s;
+        }
+
         // Alternate phase by line index: odd lines are in antiphase to even lines.
         const double phase_rad = layer_base_phase + ((poly_idx % 2 != 0) ? M_PI : 0.0);
 
@@ -182,8 +201,6 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             // Recalculate dir for each segment (for taper and length calculation).
             // XY displacement uses global_perp, NOT per-segment perp, so that
             // zigzag direction reversal on odd lines doesn't cancel the phase offset.
-            Vec2d dir = (b - a).normalized();
-
             int n_steps = std::max(1, static_cast<int>(std::ceil(seg_len_mm / step_mm)));
 
             for (int step = 0; step < n_steps; ++step) {
@@ -197,83 +214,71 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
                 // Modulation values at sub-segment positions
                 double t_mod_start = modulator->compute(sub_start_pos, period_mm, phase_rad);
-                double t_mod_end   = modulator->compute(sub_end_pos, period_mm, phase_rad);
-                double t_mod_mid   = modulator->compute(sub_mid_pos, period_mm, phase_rad);
+                double t_mod_end   = modulator->compute(sub_end_pos,   period_mm, phase_rad);
+                double t_mod_mid   = modulator->compute(sub_mid_pos,   period_mm, phase_rad);
 
                 double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
 
-                // ── XY lateral displacement (the actual physical wave) ───────
-                // Offset perpendicular to travel direction by sine × amplitude
-                double xy_off_start = lateral_amp_mm * t_mod_start * taper_val;
-                double xy_off_end   = lateral_amp_mm * t_mod_end * taper_val;
-
-                // Base XY positions along the straight segment
+                // ── Gate check on NOMINAL (un-displaced) midpoint ─────────
+                // Must use base_mid (original trajectory), NOT the displaced point.
+                // Using a displaced point would make the gate check unreliable near walls:
+                // the displaced mid might land inside the zone even when the nominal is outside.
                 Vec2d base_start = a + (b - a) * t_start;
                 Vec2d base_end   = a + (b - a) * t_end;
                 Vec2d base_mid   = a + (b - a) * t_mid;
 
-                // Apply perpendicular displacement using GLOBAL perp direction.
-                Vec2d disp_start = base_start + global_perp * xy_off_start;
-                Vec2d disp_end   = base_end + global_perp * xy_off_end;
-                Vec2d disp_mid   = base_mid + global_perp * ((xy_off_start + xy_off_end) * 0.5);
+                Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)),
+                                  coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
 
-                // Convert to scaled integer coords
-                Point pt_start(coord_t(std::round(disp_start.x() / SCALING_FACTOR)), coord_t(std::round(disp_start.y() / SCALING_FACTOR)));
-                Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)), coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
-                Point mid_pt(coord_t(std::round(disp_mid.x() / SCALING_FACTOR)), coord_t(std::round(disp_mid.y() / SCALING_FACTOR)));
-
-                // Gate: is midpoint inside the safe zone?
                 double gate = 1.0;
                 if (have_safe_zone) {
                     gate = 0.0;
                     for (const ExPolygon& ep : safe_zone) {
-                        if (ep.contains(mid_pt)) {
+                        if (ep.contains(base_mid_pt)) {
                             gate = 1.0;
                             break;
                         }
                     }
                 }
 
-                // ── Z modulation ─────────────────────────────────────────
-                double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
-                double z_end   = z_amp_frac * layer_h * t_mod_end * taper_val * gate;
+                // ── XY lateral displacement ───────────────────────────────
+                // Gate is applied here: when gate=0 (outside safe zone), no XY shift.
+                // This prevents the nozzle from physically entering the perimeter wall
+                // even when Z and flow modulation are suppressed by the gate.
+                double xy_off_start = lateral_amp_mm * t_mod_start * taper_val * gate;
+                double xy_off_end   = lateral_amp_mm * t_mod_end   * taper_val * gate;
 
-                // Safety: two-level lower bound for z_diff.
-                // 1) User overlap: nozzle may press at most (z_overlap% × layer_h) into previous layer.
-                const double z_overlap_pct = params.config->flow_weaving_z_overlap.value;
-                const double overlap_limit  = -(layer_h * z_overlap_pct / 100.0);
-                // 2) Absolute floor: nozzle must never descend below the first layer surface.
-                const double first_layer_h  = this->print_config->initial_layer_print_height.value;
-                const double absolute_floor = -(this->z - first_layer_h);
-                // Apply the less restrictive of the two (max of two negative values = shallower dip).
-                const double min_z_diff = std::max(overlap_limit, absolute_floor);
+                Vec2d disp_start = base_start + global_perp * xy_off_start;
+                Vec2d disp_end   = base_end   + global_perp * xy_off_end;
+
+                // Convert to scaled integer coords
+                Point pt_start(coord_t(std::round(disp_start.x() / SCALING_FACTOR)),
+                               coord_t(std::round(disp_start.y() / SCALING_FACTOR)));
+                Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)),
+                             coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
+
+                // ── Z modulation ──────────────────────────────────────────
+                double z_start = z_amp_frac * layer_h * t_mod_start * taper_val * gate;
+                double z_end   = z_amp_frac * layer_h * t_mod_end   * taper_val * gate;
+
+                // Apply lower bound (max of two negative limits = shallower dip wins)
                 z_start = std::max(z_start, min_z_diff);
                 z_end   = std::max(z_end,   min_z_diff);
 
-                // Upper taper near top surface.
-                // Smoothly reduces upward z_diff to 0 over the last N infill layers
-                // so the nozzle doesn't protrude into the top solid shell.
-                const int top_taper_n = params.config->flow_weaving_top_taper_layers.value;
-                if (top_taper_n > 0) {
-                    // x ∈ [0, 1]: 0 = at top infill layer, 1 = far from top
-                    const double x = std::min(static_cast<double>(this->infill_layers_above)
-                                              / static_cast<double>(top_taper_n), 1.0);
-                    // Smoothstep: f(x) = 3x² - 2x³  (0 at x=0, 1 at x=1)
-                    const double upper_taper = x * x * (3.0 - 2.0 * x);
-                    // Only cap the positive (upward) part of z_diff.
-                    const double max_z_up = z_amp_frac * layer_h * upper_taper;
-                    z_start = std::min(z_start, max_z_up);
-                    z_end   = std::min(z_end,   max_z_up);
-                }
+                // Apply upper bound (smoothstep fade near top shell)
+                z_start = std::min(z_start, max_z_up);
+                z_end   = std::min(z_end,   max_z_up);
 
-                // ── Flow/width modulation ─────────────────────────────
+                // ── Flow/width modulation ─────────────────────────────────
                 // Line width varies with the sine.  Clamp between
                 // 25% of flow_width (minimum) and nozzle diameter (maximum).
                 double width_delta     = width_amp_mm * t_mod_mid * taper_val * gate;
-                double effective_width = std::clamp(flow_width + width_delta, flow_width * 0.25, (double) nozzle_d);
+                double effective_width = std::clamp(flow_width + width_delta,
+                                                    flow_width * 0.25, (double) nozzle_d);
                 double sub_mm3         = flow_mm3_per_mm * (effective_width / flow_width);
 
-                ExtrusionPath base_path(params.extrusion_role, sub_mm3, float(flow_width), params.flow.height());
+                ExtrusionPath base_path(params.extrusion_role, sub_mm3,
+                                        float(flow_width), params.flow.height());
                 base_path.z_contoured = true;
 
                 // Polyline3: 2 points with Z offsets encoded in .z()
