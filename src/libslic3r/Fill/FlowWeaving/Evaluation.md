@@ -90,6 +90,10 @@ To resolve these physical constraints, improve surface quality, and maximize mec
 * **Purpose:** Replaces the hardcoded `1.5 mm` dampening limit. 
 * **Mechanism:** Compresses the transition zone near boundaries. By choosing a smaller taper length (e.g., `0.6 mm`), the wave retains its full vertical and lateral interlocking amplitude much closer to the perimeters, restoring structural strength in narrow cross-sections and vertical specimens.
 
+### 4. Top Surface Taper Fix (XY and Flow/Width modulation)
+* **The Issue:** The legacy top-surface taper code scaled down only the Z-axis amplitude. The XY lateral path displacement (zigzag) and the line width modulation (flow pulses) were not multiplied by `taper_scale`. When printing solid structures (e.g., at 100% infill density), this left a highly textured, wavy XY pattern on the infill layers directly beneath the flat top shell. The top shell, when laid down, duplicated this waviness, leading to severe surface defects and rough ridges.
+* **The Solution:** The `taper_scale` factor is now applied to both the active XY path displacement amplitude (`xy_off_start` / `xy_off_end`) and the width/flow modulation factor (`active_xy_amp_frac`), driving them to nominal straight-line values (displacement = 0, width modulation = 0) on the last `top_taper_layers` before the top shell. This ensures a perfectly flat and solid bed for the final outer layers.
+
 ---
 
 ## 5. Experimental Verification Protocol

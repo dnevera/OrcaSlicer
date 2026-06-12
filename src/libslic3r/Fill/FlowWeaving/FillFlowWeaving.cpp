@@ -343,20 +343,21 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
                 // ── Width modulation (clamped to wall) ────────────────────
                 double width_mod = 1.0;
-                if (gate > 0.0 && xy_amp_frac > 0.0) {
-                    width_mod = 1.0 + xy_amp_frac * t_mod_mid * combined_taper;
+                const double active_xy_amp_frac = xy_amp_frac * taper_scale;
+                if (gate > 0.0 && active_xy_amp_frac > 0.0) {
+                    width_mod = 1.0 + active_xy_amp_frac * t_mod_mid * combined_taper;
                     // Only clamp EXPANSION beyond nominal — never shrink below 1.0.
                     // Nominal half-width may already exceed dist_to_wall (normal
                     // perimeter overlap), so we only limit the EXTRA width.
                     // max_expansion = how much further the edge can go beyond nominal
                     double max_expansion_mm = std::max(0.0, dist_to_wall_mm - flow_width * 0.5 + wall_overlap);
                     double max_mod = 1.0 + 2.0 * max_expansion_mm / flow_width;
-                    width_mod = std::max(1.0 - xy_amp_frac, std::min(width_mod, max_mod));
+                    width_mod = std::max(1.0 - active_xy_amp_frac, std::min(width_mod, max_mod));
                 }
 
                 // ── XY lateral displacement (clamped to wall) ─────────────
-                double xy_off_start = lateral_amp_mm * t_mod_start * combined_taper * gate;
-                double xy_off_end   = lateral_amp_mm * t_mod_end   * combined_taper * gate;
+                double xy_off_start = lateral_amp_mm * t_mod_start * combined_taper * gate * taper_scale;
+                double xy_off_end   = lateral_amp_mm * t_mod_end   * combined_taper * gate * taper_scale;
                 // Center + half_width must stay inside wall boundary (plus overlap allowance)
                 double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5 + wall_overlap);
                 xy_off_start = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
