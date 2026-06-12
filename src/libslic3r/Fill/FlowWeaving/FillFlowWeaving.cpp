@@ -41,7 +41,8 @@ static constexpr double DEFAULT_XY_AMPLITUDE      = 10.0; // % of flow width (wi
 static constexpr double DEFAULT_XY_PATH_AMPLITUDE = 0.15; // mm lateral path displacement
 static constexpr double DEFAULT_PERIOD_MM         = 3.0;  // mm per full wave
 static constexpr double DEFAULT_PHASE_OFFSET      = 0.5;  // fraction of period (0-1)
-static constexpr double DEFAULT_TAPER_MM          = 1.5;  // mm absolute taper near walls
+static constexpr double DEFAULT_TAPER_LENGTH_MM   = 1.5;  // mm absolute taper near walls
+static constexpr double DEFAULT_WALL_OVERLAP_MM   = 0.0;  // mm extra wall overlap
 
 // Minimum distance from a point to the nearest edge of ExPolygons boundary (mm).
 // Used to clamp width/displacement so the physical line edge stays inside walls.
@@ -74,6 +75,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     double period_mm      = DEFAULT_PERIOD_MM;
     double phase_offset   = DEFAULT_PHASE_OFFSET;   // XY wave phase between layers
     double z_phase_offset = 0.0;                    // Z wave phase between layers
+    double taper_len_mm   = DEFAULT_TAPER_LENGTH_MM;
+    double wall_overlap   = DEFAULT_WALL_OVERLAP_MM;
 
     if (params.config) {
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
@@ -88,6 +91,10 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             phase_offset = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_phase_offset"))
             z_phase_offset = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_taper_length"))
+            taper_len_mm = v->value;
+        if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_wall_overlap"))
+            wall_overlap = v->value;
     }
 
     const double z_amp_frac  = z_amp_pct / 100.0;
@@ -230,8 +237,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         if (total_len_mm < 1e-6)
             continue;
 
-        // Taper: fixed absolute distance from wall (line endpoints)
-        const double taper_len_mm = DEFAULT_TAPER_MM;
+        // Taper: user defined or default distance from wall (line endpoints)
 
         // Path displacement: absolute mm from config
         const double lateral_amp_mm = xy_path_amp_mm;
@@ -343,7 +349,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                     // Nominal half-width may already exceed dist_to_wall (normal
                     // perimeter overlap), so we only limit the EXTRA width.
                     // max_expansion = how much further the edge can go beyond nominal
-                    double max_expansion_mm = std::max(0.0, dist_to_wall_mm - flow_width * 0.5);
+                    double max_expansion_mm = std::max(0.0, dist_to_wall_mm - flow_width * 0.5 + wall_overlap);
                     double max_mod = 1.0 + 2.0 * max_expansion_mm / flow_width;
                     width_mod = std::max(1.0 - xy_amp_frac, std::min(width_mod, max_mod));
                 }
@@ -351,8 +357,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // ── XY lateral displacement (clamped to wall) ─────────────
                 double xy_off_start = lateral_amp_mm * t_mod_start * combined_taper * gate;
                 double xy_off_end   = lateral_amp_mm * t_mod_end   * combined_taper * gate;
-                // Center + half_width must stay inside wall boundary
-                double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5);
+                // Center + half_width must stay inside wall boundary (plus overlap allowance)
+                double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5 + wall_overlap);
                 xy_off_start = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
                 xy_off_end   = std::max(-max_lateral, std::min(xy_off_end,   max_lateral));
 

@@ -4690,6 +4690,29 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(50.0));
 
+    def           = this->add("flow_weaving_taper_length", coFloat);
+    def->label    = L("Weaving taper length");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance from the walls (in mm) where the wave amplitude starts to fade out to zero.\n"
+                      "Recommended: 1.5 mm. Lower values (e.g., 0.5 mm) allow interlocking waves closer to the perimeters.");
+    def->sidetext = L("mm");
+    def->min      = 0.0;
+    def->max      = 10.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.5));
+
+    def           = this->add("flow_weaving_wall_overlap", coFloat);
+    def->label    = L("Weaving wall overlap");
+    def->category = L("Strength");
+    def->tooltip  = L("Extra allowance (in mm) for the lateral wave peaks to overlap into the inner perimeters.\n"
+                      "0 = wave touches but never crosses the wall.\n"
+                      "0.1-0.15 mm = improves bond strength by fusing the infill waves directly into the perimeters.");
+    def->sidetext = L("mm");
+    def->min      = 0.0;
+    def->max      = 1.0;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
     def->category = L("Quality");
