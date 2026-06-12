@@ -4694,7 +4694,8 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Weaving taper length");
     def->category = L("Strength");
     def->tooltip  = L("Distance from the walls (in mm) where the wave amplitude starts to fade out to zero.\n"
-                      "Recommended: 1.5 mm. Lower values (e.g., 0.5 mm) allow interlocking waves closer to the perimeters.");
+                      "Recommended: 1.5 mm. Lower values (e.g., 0.5 mm) allow interlocking waves closer to the perimeters.\n"
+                      "For narrow or thin-walled objects, reducing this value (e.g., to 0.5-0.8 mm) is critical to prevent the wave from being fully flattened, restoring the Z-interlocking strength.");
     def->sidetext = L("mm");
     def->min      = 0.0;
     def->max      = 10.0;
@@ -4706,7 +4707,8 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("Extra allowance (in mm) for the lateral wave peaks to overlap into the inner perimeters.\n"
                       "0 = wave touches but never crosses the wall.\n"
-                      "0.1-0.15 mm = improves bond strength by fusing the infill waves directly into the perimeters.");
+                      "0.1-0.15 mm = improves bond strength by fusing the infill waves directly into the perimeters.\n"
+                      "For narrow or thin objects, use smaller overlap values (e.g., 0.05-0.1 mm) to avoid local over-extrusion and surface defects.");
     def->sidetext = L("mm");
     def->min      = 0.0;
     def->max      = 1.0;
