@@ -4582,7 +4582,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0;
     def->max      = 95;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(30.0));
+    def->set_default_value(new ConfigOptionFloat(25.0));
 
     def           = this->add("flow_weaving_xy_amplitude", coFloat);
     def->label    = L("XY width modulation");
@@ -4607,7 +4607,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0;
     def->max      = 1.0;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.02));
+    def->set_default_value(new ConfigOptionFloat(0.15));
 
     def           = this->add("flow_weaving_period", coFloat);
     def->label    = L("Weaving period");
@@ -4619,7 +4619,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0.5;
     def->max      = 20.0;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.5));
+    def->set_default_value(new ConfigOptionFloat(3.0));
 
     def           = this->add("flow_weaving_phase_offset", coFloat);
     def->label    = L("Layer phase offset");
@@ -4632,7 +4632,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0;
     def->max      = 1.0;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.2));
+    def->set_default_value(new ConfigOptionFloat(0.5));
 
     def           = this->add("flow_weaving_z_phase_offset", coFloat);
     def->label    = L("Z layer phase offset");
@@ -4661,7 +4661,7 @@ void PrintConfigDef::init_fff_params()
     def->min      = 0;
     def->max      = 50;
     def->mode     = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(1.0));
+    def->set_default_value(new ConfigOptionFloat(20.0));
 
     def           = this->add("flow_weaving_top_taper_layers", coInt);
     def->label    = L("Top surface taper layers");

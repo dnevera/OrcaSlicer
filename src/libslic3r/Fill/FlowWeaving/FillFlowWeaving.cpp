@@ -36,11 +36,11 @@
 namespace Slic3r {
 
 // ── Defaults (used when config keys are missing) ─────────────────────────────
-static constexpr double DEFAULT_Z_AMPLITUDE_PCT   = 30.0; // % of layer height
+static constexpr double DEFAULT_Z_AMPLITUDE_PCT   = 25.0; // % of layer height
 static constexpr double DEFAULT_XY_AMPLITUDE      = 10.0; // % of flow width (width modulation)
-static constexpr double DEFAULT_XY_PATH_AMPLITUDE = 0.02; // mm lateral path displacement
-static constexpr double DEFAULT_PERIOD_MM         = 0.5;  // mm per full wave
-static constexpr double DEFAULT_PHASE_OFFSET      = 0.2;  // fraction of period (0-1)
+static constexpr double DEFAULT_XY_PATH_AMPLITUDE = 0.15; // mm lateral path displacement
+static constexpr double DEFAULT_PERIOD_MM         = 3.0;  // mm per full wave
+static constexpr double DEFAULT_PHASE_OFFSET      = 0.5;  // fraction of period (0-1)
 static constexpr double DEFAULT_TAPER_MM          = 1.5;  // mm absolute taper near walls
 
 // Minimum distance from a point to the nearest edge of ExPolygons boundary (mm).
@@ -292,29 +292,53 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // the displaced mid might land inside the zone even when the nominal is outside.
                 Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)), coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
 
+                // ── Wall-distance calculation ──────────────────────────────
+                // Distance from nominal midpoint to nearest wall boundary (mm).
+                // Always computed so it can be used for smooth Z tapering near walls.
+                double dist_to_wall_mm = 1e18;
+                if (!this->no_overlap_expolygons.empty())
+                    dist_to_wall_mm = min_dist_to_boundary_mm(base_mid_pt, this->no_overlap_expolygons);
+
+                // ── Combined Wall & Endpoint taper ─────────────────────────
+                // taper_val is distance along the line from endpoints.
+                // wall_taper is the actual 2D distance to the nearest wall.
+                double wall_taper = 1.0;
+                if (dist_to_wall_mm < taper_len_mm) {
+                    double x = dist_to_wall_mm / taper_len_mm;
+                    wall_taper = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
+                }
+                double combined_taper = std::min(taper_val, wall_taper);
+
+                // ── Smooth Gate check ──────────────────────────────────────
+                // Transition coefficient from 0.0 (outside safe zone) to 1.0 (deep inside).
+                // Uses distance to safe zone boundary to smoothly ramp the wave up.
                 double gate = 1.0;
                 if (have_safe_zone) {
-                    gate = 0.0;
+                    bool inside = false;
                     for (const ExPolygon& ep : safe_zone) {
                         if (ep.contains(base_mid_pt)) {
-                            gate = 1.0;
+                            inside = true;
                             break;
                         }
                     }
+                    if (inside) {
+                        double dist_to_safe_boundary_mm = min_dist_to_boundary_mm(base_mid_pt, safe_zone);
+                        constexpr double transition_len_mm = 1.0; // 1.0 mm transition zone
+                        if (dist_to_safe_boundary_mm < transition_len_mm) {
+                            double x = dist_to_safe_boundary_mm / transition_len_mm;
+                            gate = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
+                        } else {
+                            gate = 1.0;
+                        }
+                    } else {
+                        gate = 0.0;
+                    }
                 }
-
-                // ── Wall-distance clamping ─────────────────────────────────
-                // Distance from nominal midpoint to nearest wall boundary (mm).
-                // Clamps width expansion + lateral displacement so the physical
-                // edge of the extruded line never exceeds the wall.
-                double dist_to_wall_mm = 1e18;
-                if (gate > 0.0 && !this->no_overlap_expolygons.empty())
-                    dist_to_wall_mm = min_dist_to_boundary_mm(base_mid_pt, this->no_overlap_expolygons);
 
                 // ── Width modulation (clamped to wall) ────────────────────
                 double width_mod = 1.0;
                 if (gate > 0.0 && xy_amp_frac > 0.0) {
-                    width_mod = 1.0 + xy_amp_frac * t_mod_mid * taper_val;
+                    width_mod = 1.0 + xy_amp_frac * t_mod_mid * combined_taper;
                     // Only clamp EXPANSION beyond nominal — never shrink below 1.0.
                     // Nominal half-width may already exceed dist_to_wall (normal
                     // perimeter overlap), so we only limit the EXTRA width.
@@ -325,8 +349,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 }
 
                 // ── XY lateral displacement (clamped to wall) ─────────────
-                double xy_off_start = lateral_amp_mm * t_mod_start * taper_val * gate;
-                double xy_off_end   = lateral_amp_mm * t_mod_end   * taper_val * gate;
+                double xy_off_start = lateral_amp_mm * t_mod_start * combined_taper * gate;
+                double xy_off_end   = lateral_amp_mm * t_mod_end   * combined_taper * gate;
                 // Center + half_width must stay inside wall boundary
                 double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5);
                 xy_off_start = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
@@ -340,8 +364,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)), coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
 
                 // ── Z modulation (uses Z-specific phase, independent of XY) ──
-                double z_start = z_amp_frac * layer_h * t_mod_z_start * taper_val * gate;
-                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * taper_val * gate;
+                double z_start = z_amp_frac * layer_h * t_mod_z_start * combined_taper * gate;
+                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * combined_taper * gate;
 
 
                 // Apply lower bound (max of two negative limits = shallower dip wins)
