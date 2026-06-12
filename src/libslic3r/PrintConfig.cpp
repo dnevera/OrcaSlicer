@@ -4676,7 +4676,7 @@ void PrintConfigDef::init_fff_params()
                       "Taper follows smoothstep: slow at start, fast in middle, slow at end.");
     def->sidetext = L("layers");
     def->min      = 0;
-    def->max      = 10;
+    def->max      = 20;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionInt(4));
 

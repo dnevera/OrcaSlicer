@@ -1370,7 +1370,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                 // Count consecutive infill layers above (for FlowWeaving top-surface taper).
                 {
                     int above_count = 0;
-                    constexpr int MAX_TAPER_LOOK = 10;
+                    constexpr int MAX_TAPER_LOOK = 20;
                     for (size_t li = layer_idx + 1;
                          li < layers.size() && above_count < MAX_TAPER_LOOK; ++li) {
                         bool has_infill = false;

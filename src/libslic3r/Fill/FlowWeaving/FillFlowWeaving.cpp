@@ -371,8 +371,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)), coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
 
                 // ── Z modulation (uses Z-specific phase, independent of XY) ──
-                double z_start = z_amp_frac * layer_h * t_mod_z_start * combined_taper * gate;
-                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * combined_taper * gate;
+                double z_start = z_amp_frac * layer_h * t_mod_z_start * combined_taper * gate * taper_scale;
+                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * combined_taper * gate * taper_scale;
 
 
                 // Apply lower bound (max of two negative limits = shallower dip wins)
