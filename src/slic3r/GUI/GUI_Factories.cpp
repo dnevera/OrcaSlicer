@@ -157,6 +157,7 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
       {{"outer_wall_speed", "", 1},
        {"inner_wall_speed", "", 2},
        {"sparse_infill_speed", "", 3},
+       {"flow_weaving_speed", "", 3},
        {"top_surface_speed", "", 4},
        {"internal_solid_infill_speed", "", 5},
        {"enable_overhang_speed", "", 6},

@@ -2514,6 +2514,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("flow_weaving_z_phase_offset");
         optgroup->append_single_option_line("flow_weaving_z_overlap");
         optgroup->append_single_option_line("flow_weaving_top_taper_layers");
+        optgroup->append_single_option_line("flow_weaving_speed");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");
@@ -2539,6 +2540,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("small_perimeter_speed", "speed_settings_other_layers_speed#small-perimeters");
         optgroup->append_single_option_line("small_perimeter_threshold", "speed_settings_other_layers_speed#small-perimeters-threshold");
         optgroup->append_single_option_line("sparse_infill_speed", "speed_settings_other_layers_speed#sparse-infill");
+        optgroup->append_single_option_line("flow_weaving_speed", "speed_settings_other_layers_speed#sparse-infill");
         optgroup->append_single_option_line("internal_solid_infill_speed", "speed_settings_other_layers_speed#internal-solid-infill");
         optgroup->append_single_option_line("top_surface_speed", "speed_settings_other_layers_speed#top-surface");
         optgroup->append_single_option_line("gap_infill_speed", "speed_settings_other_layers_speed#gap-infill");

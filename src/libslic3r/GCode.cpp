@@ -2318,6 +2318,7 @@ namespace DoExport {
 	                    region.config().get_abs_value("bridge_speed") == 0)
 	                    mm3_per_mm.push_back(layerm->perimeters.min_mm3_per_mm());
 	                if (region.config().get_abs_value("sparse_infill_speed") == 0 ||
+	                    region.config().flow_weaving_speed.value == 0 ||
 	                    region.config().get_abs_value("internal_solid_infill_speed") == 0 ||
 	                    region.config().get_abs_value("top_surface_speed") == 0 ||
                         region.config().get_abs_value("bridge_speed") == 0)
@@ -7031,7 +7032,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else if (path.role() == erSupportTransition || path.role() == erBridgeInfill) {
             speed = m_config.get_abs_value("bridge_speed");
         } else if (path.role() == erInternalInfill) {
-            speed = m_config.get_abs_value("sparse_infill_speed");
+            speed = path.z_contoured ? m_config.get_abs_value("flow_weaving_speed") : m_config.get_abs_value("sparse_infill_speed");
         } else if (path.role() == erSolidInfill) {
             speed = m_config.get_abs_value("internal_solid_infill_speed");
         } else if (path.role() == erTopSolidInfill) {

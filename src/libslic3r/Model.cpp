@@ -3022,6 +3022,7 @@ void ModelInstance::transform_polygon(Polygon* polygon) const
 // BBS set print speed table and find maximum speed
 void Model::setPrintSpeedTable(const DynamicPrintConfig& config, const PrintConfig& print_config) {
     //Slic3r::DynamicPrintConfig config = wxGetApp().preset_bundle->full_config();
+    printSpeedMap.flowWeavingSpeed = 0;
     printSpeedMap.maxSpeed = 0;
     if (config.has("inner_wall_speed")) {
         printSpeedMap.perimeterSpeed = config.opt_float("inner_wall_speed");
@@ -3036,6 +3037,11 @@ void Model::setPrintSpeedTable(const DynamicPrintConfig& config, const PrintConf
         printSpeedMap.infillSpeed = config.opt_float("sparse_infill_speed");
         if (printSpeedMap.infillSpeed > printSpeedMap.maxSpeed)
             printSpeedMap.maxSpeed = printSpeedMap.infillSpeed;
+    }
+    if (config.has("flow_weaving_speed")) {
+        printSpeedMap.flowWeavingSpeed = config.opt_float("flow_weaving_speed");
+        if (printSpeedMap.flowWeavingSpeed > printSpeedMap.maxSpeed)
+            printSpeedMap.maxSpeed = printSpeedMap.flowWeavingSpeed;
     }
     if (config.has("internal_solid_infill_speed")) {
         printSpeedMap.solidInfillSpeed = config.opt_float("internal_solid_infill_speed");
@@ -3278,6 +3284,7 @@ double Model::findMaxSpeed(const ModelObject* object) {
     double topSolidInfillSpeedObj = Model::printSpeedMap.topSolidInfillSpeed;
     double supportSpeedObj = Model::printSpeedMap.supportSpeed;
     double smallPerimeterSpeedObj = Model::printSpeedMap.smallPerimeterSpeed;
+    double flowWeavingSpeedObj = Model::printSpeedMap.flowWeavingSpeed;
     for (std::string objectKey : objectKeys) {
         if (objectKey == "inner_wall_speed"){
             perimeterSpeedObj = object->config.opt_float(objectKey);
@@ -3285,6 +3292,8 @@ double Model::findMaxSpeed(const ModelObject* object) {
         }
         if (objectKey == "sparse_infill_speed")
             infillSpeedObj = object->config.opt_float(objectKey);
+        if (objectKey == "flow_weaving_speed")
+            flowWeavingSpeedObj = object->config.opt_float(objectKey);
         if (objectKey == "internal_solid_infill_speed")
             solidInfillSpeedObj = object->config.opt_float(objectKey);
         if (objectKey == "top_surface_speed")
@@ -3296,7 +3305,7 @@ double Model::findMaxSpeed(const ModelObject* object) {
         if (objectKey == "small_perimeter_speed")
             smallPerimeterSpeedObj = object->config.opt_float(objectKey);
     }
-    objMaxSpeed = std::max(perimeterSpeedObj, std::max(externalPerimeterSpeedObj, std::max(infillSpeedObj, std::max(solidInfillSpeedObj, std::max(topSolidInfillSpeedObj, std::max(supportSpeedObj, std::max(smallPerimeterSpeedObj, objMaxSpeed)))))));
+    objMaxSpeed = std::max(perimeterSpeedObj, std::max(externalPerimeterSpeedObj, std::max(infillSpeedObj, std::max(solidInfillSpeedObj, std::max(topSolidInfillSpeedObj, std::max(supportSpeedObj, std::max(smallPerimeterSpeedObj, std::max(flowWeavingSpeedObj, objMaxSpeed))))))));
     if (objMaxSpeed <= 0) objMaxSpeed = 250.;
     return objMaxSpeed;
 }

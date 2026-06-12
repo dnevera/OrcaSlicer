@@ -985,8 +985,12 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                     params.role_speed = region_config.bridge_speed;
                 else if (params.extrusion_role == erInternalBridgeInfill)
                     params.role_speed = region_config.get_abs_value("internal_bridge_speed");
-                else if (params.extrusion_role == erInternalInfill)
-                    params.role_speed = region_config.sparse_infill_speed;
+                else if (params.extrusion_role == erInternalInfill) {
+                    if (params.pattern == ipFlowWeaving)
+                        params.role_speed = region_config.flow_weaving_speed;
+                    else
+                        params.role_speed = region_config.sparse_infill_speed;
+                }
                 else if (params.extrusion_role == erTopSolidInfill)
                     params.role_speed = region_config.top_surface_speed;
                 else if (params.extrusion_role == erSolidInfill)

@@ -4576,8 +4576,9 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Z weaving amplitude");
     def->category = L("Strength");
     def->tooltip  = L("Height of Z oscillation as percentage of layer height.\n"
-                      "Higher = stronger interlocking, but needs precise Z axis.\n"
-                      "Recommended: 20-50%% PLA/PETG, 10-30%% ABS/ASA.");
+                      "Recommended: 20-30% for standard layer heights (e.g., 0.2 mm).\n"
+                      "Lower than 15% offers poor interlocking.\n"
+                      "Higher than 50% may cause the extruded path to lose contact with the previous layer, leading to loose loops and excessive flow spikes.");
     def->sidetext = L("%");
     def->min      = 0;
     def->max      = 95;
@@ -4588,8 +4589,9 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("XY width modulation");
     def->category = L("Strength");
     def->tooltip  = L("Amplitude of line width modulation as percentage of flow width.\n"
-                      "Effective width is clamped between 25% of flow width and nozzle diameter.\n"
-                      "Also controls lateral path displacement.");
+                      "Recommended: 5-15% (stable flow, clean walls).\n"
+                      "Values >30% may lead to extrusion lag, voids, or blobs due to pressure pulses.\n"
+                      "Effective width is clamped between 25% of flow width and nozzle diameter.");
     def->sidetext = L("%");
     def->min      = 0;
     def->max      = 100;
@@ -4601,8 +4603,9 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("Lateral path displacement of the wave in mm.\n"
                       "Controls how far the nozzle moves sideways.\n"
-                      "Independent of width modulation.\n"
-                      "Recommended: 0.1-0.3 mm.");
+                      "Recommended: 0.10-0.20 mm.\n"
+                      "Lower than 0.05 mm is flattened by stepper microstepping.\n"
+                      "Higher than 0.25 mm causes strong toolhead vibrations on high speeds.");
     def->sidetext = L("mm");
     def->min      = 0;
     def->max      = 1.0;
@@ -4613,8 +4616,8 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Weaving period");
     def->category = L("Strength");
     def->tooltip  = L("Distance between wave peaks in mm.\n"
-                      "Shorter = tighter interlocking but may cause artifacts.\n"
-                      "2-5mm works best for most materials.");
+                      "Shorter = tighter interlocking but dramatically increases Z-axis oscillation frequency.\n"
+                      "Recommended: 3.0-5.0 mm to keep Z-axis motor within safe limits (under 30-40 Hz) and prevent step loss.");
     def->sidetext = L("mm");
     def->min      = 0.5;
     def->max      = 20.0;
@@ -4653,10 +4656,9 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("How far the nozzle may press into the previous layer during Z-modulation,\n"
                       "expressed as a percentage of the layer height.\n"
-                      "A small overlap improves interlayer bonding by re-melting the surface below.\n"
-                      "0 = nozzle stays at or above the previous layer top.\n"
-                      "25 = nozzle may dip 25% of layer_h into the previous layer (recommended).\n"
-                      "50 = nozzle may dip halfway into the previous layer (aggressive).");
+                      "Recommended: 20-25% for optimal interlayer fusion.\n"
+                      "Less than 10% has negligible effect.\n"
+                      "More than 35% causes nozzle scraping, nozzle vibrations, and plastic build-up on the heater block.");
     def->sidetext = L("% of layer height");
     def->min      = 0;
     def->max      = 50;
@@ -4677,6 +4679,16 @@ void PrintConfigDef::init_fff_params()
     def->max      = 10;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionInt(4));
+
+    def           = this->add("flow_weaving_speed", coFloat);
+    def->label    = L("Flow weaving speed");
+    def->category = L("Speed");
+    def->tooltip  = L("Speed of flow weaving infill.\n"
+                      "Slower speed (30-60 mm/s) is highly recommended to prevent Z-axis step loss due to constant oscillation.");
+    def->sidetext = L("mm/s");
+    def->min      = 1;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(50.0));
 
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
