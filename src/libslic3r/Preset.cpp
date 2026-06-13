@@ -1309,6 +1309,7 @@ static std::vector<std::string> s_Preset_print_options{
     "flow_weaving_taper_length",
     "flow_weaving_wall_overlap",
     "flow_weaving_ironing",
+    "flow_weaving_ironing_speed",
     "ironing_expansion",
 };
 

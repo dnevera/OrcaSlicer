@@ -4727,6 +4727,18 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def           = this->add("flow_weaving_ironing_speed", coFloat);
+    def->label    = L("Weaving ironing speed");
+    def->category = L("Strength");
+    def->tooltip  = L("Speed of the weaving ironing pass (the flat low-flow smoothing pass printed\n"
+                      "on the topmost FlowWeaving infill layer).\n"
+                      "Lower values (15-25 mm/s) improve surface smoothness.\n"
+                      "Independent from Flow weaving speed and from the standard Ironing speed.");
+    def->sidetext = L("mm/s");
+    def->min      = 1;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(20.0));
+
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");
     def->category = L("Quality");

@@ -49,10 +49,11 @@ static constexpr double DEFAULT_WALL_OVERLAP_MM   = 0.0;  // mm extra wall overl
 static double min_dist_to_boundary_mm(const Point& pt, const ExPolygons& expolys)
 {
     double min_dist_scaled = 1e18;
-    auto check_ring = [&](const Points& pts) {
+    auto check_ring        = [&](const Points& pts) {
         for (size_t i = 0, n = pts.size(); i < n; ++i) {
             double d = Line(pts[i], pts[(i + 1) % n]).distance_to(pt);
-            if (d < min_dist_scaled) min_dist_scaled = d;
+            if (d < min_dist_scaled)
+                min_dist_scaled = d;
         }
     };
     for (const ExPolygon& ep : expolys) {
@@ -73,8 +74,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     double xy_amp         = DEFAULT_XY_AMPLITUDE;
     double xy_path_amp_mm = DEFAULT_XY_PATH_AMPLITUDE;
     double period_mm      = DEFAULT_PERIOD_MM;
-    double phase_offset   = DEFAULT_PHASE_OFFSET;   // XY wave phase between layers
-    double z_phase_offset = 0.0;                    // Z wave phase between layers
+    double phase_offset   = DEFAULT_PHASE_OFFSET; // XY wave phase between layers
+    double z_phase_offset = 0.0;                  // Z wave phase between layers
     double taper_len_mm   = DEFAULT_TAPER_LENGTH_MM;
     double wall_overlap   = DEFAULT_WALL_OVERLAP_MM;
     bool ironing_enabled  = true;
@@ -106,8 +107,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
         taper_scale = 0.0;
     } else if (top_taper_n > 0) {
-        const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1) / static_cast<double>(top_taper_n),
-                                  1.0);
+        const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1) / static_cast<double>(top_taper_n), 1.0);
         taper_scale    = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
     }
 
@@ -123,30 +123,27 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 local_params.extrusion_role = erSolidInfill;
             }
         }
-        
+
         size_t orig_size = out.size();
         FillRectilinear::fill_surface_extrusion(surface, local_params, out);
-        
+
         const bool generate_ironing = (top_taper_n > 0 && this->infill_layers_above == 0 && ironing_enabled);
         if (generate_ironing && out.size() > orig_size) {
             ExtrusionEntityCollection* ironing_eec = new ExtrusionEntityCollection();
-            ironing_eec->no_sort = this->no_sort();
-            
+            ironing_eec->no_sort                   = this->no_sort();
+
             for (size_t i = orig_size; i < out.size(); ++i) {
                 if (auto* eec = dynamic_cast<ExtrusionEntityCollection*>(out[i])) {
                     for (auto* entity : eec->entities) {
                         if (auto* path = dynamic_cast<ExtrusionPath*>(entity)) {
-                            ExtrusionPath ironing_path(erIroning,
-                                                       path->mm3_per_mm * 0.15,
-                                                       path->width,
-                                                       path->height);
+                            ExtrusionPath ironing_path(erIroning, path->mm3_per_mm * 0.15, path->width, path->height);
                             ironing_path.polyline = path->polyline;
                             ironing_eec->entities.push_back(new ExtrusionPath(std::move(ironing_path)));
                         }
                     }
                 }
             }
-            
+
             if (!ironing_eec->entities.empty()) {
                 out.push_back(ironing_eec);
             } else {
@@ -185,9 +182,9 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     eec->no_sort = this->no_sort();
 
     ExtrusionEntityCollection* ironing_eec = nullptr;
-    const bool generate_ironing = (top_taper_n > 0 && this->infill_layers_above == 0 && ironing_enabled);
+    const bool generate_ironing            = (top_taper_n > 0 && this->infill_layers_above == 0 && ironing_enabled);
     if (generate_ironing) {
-        ironing_eec = new ExtrusionEntityCollection();
+        ironing_eec          = new ExtrusionEntityCollection();
         ironing_eec->no_sort = this->no_sort();
     }
 
@@ -207,13 +204,13 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     //
     //   phase_offset = 0 → perfect trough-into-trough (maximum depth)
     //   phase_offset > 0 → gradual shift per same-direction layer pair
-    const size_t same_dir_idx      = this->layer_id / 2;
+    const size_t same_dir_idx = this->layer_id / 2;
     // XY and Z phases are INDEPENDENT:
     //   phase_offset   → XY displacement wave (visual pattern between layers)
     //   z_phase_offset → Z wave interlocking strategy
     //     0.0 = trough-into-trough (nozzle dips at previous layer's valley positions)
     //     0.5 = anti-phase (nozzle dips where previous layer peaked)
-    const double xy_phase_rad = same_dir_idx * phase_offset   * 2.0 * M_PI;
+    const double xy_phase_rad = same_dir_idx * phase_offset * 2.0 * M_PI;
     const double z_phase_rad  = same_dir_idx * z_phase_offset * 2.0 * M_PI;
 
     // Global perpendicular to the ACTUAL fill direction (including layer rotation).
@@ -267,7 +264,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         // This ensures the top surface is free of Z-wave artifacts even at
         // short periods (0.5mm) where Z-ripples telegraph through thin top shells.
         // Using top_taper_n defined at the beginning of the function
-        double taper_scale    = 1.0;
+        double taper_scale = 1.0;
         if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
             // Hard disable: last top_taper_n infill layers print flat
             taper_scale = 0.0;
@@ -350,11 +347,11 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 const double sp_mid   = base_mid.dot(fill_dir);
                 // Z phase: controls inter-layer interlocking depth/alignment
                 const double t_mod_z_start = modulator->compute(sp_start, period_mm, z_phase_rad);
-                const double t_mod_z_end   = modulator->compute(sp_end,   period_mm, z_phase_rad);
+                const double t_mod_z_end   = modulator->compute(sp_end, period_mm, z_phase_rad);
                 // XY phase: controls lateral displacement wave pattern
-                const double t_mod_start   = modulator->compute(sp_start, period_mm, xy_phase_rad);
-                const double t_mod_end     = modulator->compute(sp_end,   period_mm, xy_phase_rad);
-                const double t_mod_mid     = modulator->compute(sp_mid,   period_mm, xy_phase_rad);
+                const double t_mod_start = modulator->compute(sp_start, period_mm, xy_phase_rad);
+                const double t_mod_end   = modulator->compute(sp_end, period_mm, xy_phase_rad);
+                const double t_mod_mid   = modulator->compute(sp_mid, period_mm, xy_phase_rad);
 
                 double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
 
@@ -376,7 +373,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 // wall_taper is the actual 2D distance to the nearest wall.
                 double wall_taper = 1.0;
                 if (dist_to_wall_mm < taper_len_mm) {
-                    double x = dist_to_wall_mm / taper_len_mm;
+                    double x   = dist_to_wall_mm / taper_len_mm;
                     wall_taper = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
                 }
                 double combined_taper = std::min(taper_val, wall_taper);
@@ -394,11 +391,11 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                         }
                     }
                     if (inside) {
-                        double dist_to_safe_boundary_mm = min_dist_to_boundary_mm(base_mid_pt, safe_zone);
+                        double dist_to_safe_boundary_mm    = min_dist_to_boundary_mm(base_mid_pt, safe_zone);
                         constexpr double transition_len_mm = 1.0; // 1.0 mm transition zone
                         if (dist_to_safe_boundary_mm < transition_len_mm) {
                             double x = dist_to_safe_boundary_mm / transition_len_mm;
-                            gate = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
+                            gate     = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
                         } else {
                             gate = 1.0;
                         }
@@ -408,7 +405,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 }
 
                 // ── Width modulation (clamped to wall) ────────────────────
-                double width_mod = 1.0;
+                double width_mod                = 1.0;
                 const double active_xy_amp_frac = xy_amp_frac * taper_scale;
                 if (gate > 0.0 && active_xy_amp_frac > 0.0) {
                     width_mod = 1.0 + active_xy_amp_frac * t_mod_mid * combined_taper;
@@ -417,17 +414,17 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                     // perimeter overlap), so we only limit the EXTRA width.
                     // max_expansion = how much further the edge can go beyond nominal
                     double max_expansion_mm = std::max(0.0, dist_to_wall_mm - flow_width * 0.5 + wall_overlap);
-                    double max_mod = 1.0 + 2.0 * max_expansion_mm / flow_width;
-                    width_mod = std::max(1.0 - active_xy_amp_frac, std::min(width_mod, max_mod));
+                    double max_mod          = 1.0 + 2.0 * max_expansion_mm / flow_width;
+                    width_mod               = std::max(1.0 - active_xy_amp_frac, std::min(width_mod, max_mod));
                 }
 
                 // ── XY lateral displacement (clamped to wall) ─────────────
                 double xy_off_start = lateral_amp_mm * t_mod_start * combined_taper * gate * taper_scale;
-                double xy_off_end   = lateral_amp_mm * t_mod_end   * combined_taper * gate * taper_scale;
+                double xy_off_end   = lateral_amp_mm * t_mod_end * combined_taper * gate * taper_scale;
                 // Center + half_width must stay inside wall boundary (plus overlap allowance)
                 double max_lateral = std::max(0.0, dist_to_wall_mm - flow_width * width_mod * 0.5 + wall_overlap);
-                xy_off_start = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
-                xy_off_end   = std::max(-max_lateral, std::min(xy_off_end,   max_lateral));
+                xy_off_start       = std::max(-max_lateral, std::min(xy_off_start, max_lateral));
+                xy_off_end         = std::max(-max_lateral, std::min(xy_off_end, max_lateral));
 
                 Vec2d disp_start = base_start + global_perp * xy_off_start;
                 Vec2d disp_end   = base_end + global_perp * xy_off_end;
@@ -437,9 +434,10 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 Point pt_end(coord_t(std::round(disp_end.x() / SCALING_FACTOR)), coord_t(std::round(disp_end.y() / SCALING_FACTOR)));
 
                 // ── Z modulation (uses Z-specific phase, independent of XY) ──
-                double z_start = z_amp_frac * layer_h * t_mod_z_start * combined_taper * gate * taper_scale;
-                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * combined_taper * gate * taper_scale;
-
+                // Z tapers only near line endpoints (taper_val) and near top surface (taper_scale).
+                // Wall proximity (wall_taper) must NOT reduce Z — full amplitude all the way to walls.
+                double z_start = z_amp_frac * layer_h * t_mod_z_start * taper_val * gate * taper_scale;
+                double z_end   = z_amp_frac * layer_h * t_mod_z_end   * taper_val * gate * taper_scale;
 
                 // Apply lower bound (max of two negative limits = shallower dip wins)
                 z_start = std::max(z_start, min_z_diff);
@@ -451,7 +449,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
                 // ── Flow (width-modulated) ─────────────────────────────
                 const double sub_mm3  = flow_mm3_per_mm * width_mod;
-                const float  mod_width = float(flow_width * width_mod);
+                const float mod_width = float(flow_width * width_mod);
 
                 ExtrusionPath base_path(params.extrusion_role, sub_mm3, mod_width, params.flow.height());
 
@@ -472,20 +470,25 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
                 // ── Разглаживающий проход (Ironing) ──────────────────────────
                 if (generate_ironing) {
-                    const double ironing_mm3 = flow_mm3_per_mm * 0.15; // 15% поток
+                    const double ironing_mm3  = flow_mm3_per_mm * 0.15; // 15% поток
                     const float ironing_width = float(flow_width);
+                    // Intentionally uses params.extrusion_role (erInternalInfill) with z_contoured=true
+                    // so GCode.cpp selects flow_weaving_speed for this pass, not ironing_speed.
                     ExtrusionPath ironing_base_path(params.extrusion_role, ironing_mm3, ironing_width, params.flow.height());
                     ironing_base_path.z_contoured = true;
 
                     Polyline3 ironing_pl3;
                     ironing_pl3.points.reserve(2);
-                    Point pt_iron_start(coord_t(std::round(base_start.x() / SCALING_FACTOR)), coord_t(std::round(base_start.y() / SCALING_FACTOR)));
-                    Point pt_iron_end(coord_t(std::round(base_end.x() / SCALING_FACTOR)), coord_t(std::round(base_end.y() / SCALING_FACTOR)));
+                    Point pt_iron_start(coord_t(std::round(base_start.x() / SCALING_FACTOR)),
+                                        coord_t(std::round(base_start.y() / SCALING_FACTOR)));
+                    Point pt_iron_end(coord_t(std::round(base_end.x() / SCALING_FACTOR)),
+                                      coord_t(std::round(base_end.y() / SCALING_FACTOR)));
                     ironing_pl3.points.push_back(Point3(int64_t(pt_iron_start.x()), int64_t(pt_iron_start.y()), int64_t(0)));
                     ironing_pl3.points.push_back(Point3(int64_t(pt_iron_end.x()), int64_t(pt_iron_end.y()), int64_t(0)));
 
                     std::vector<double> ironing_z_diffs = {0.0};
-                    auto* ironing_contoured = new ExtrusionPathContoured(std::move(ironing_pl3), ironing_base_path, std::move(ironing_z_diffs));
+                    auto* ironing_contoured             = new ExtrusionPathContoured(std::move(ironing_pl3), ironing_base_path,
+                                                                                     std::move(ironing_z_diffs));
                     ironing_eec->entities.push_back(ironing_contoured);
                 }
             }
@@ -502,8 +505,124 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         }
     }
 
-    // Gap fill: skipped — modulated extrusion covers the fill area.
-    // Gap fill would conflict with Z modulation at line boundaries.
+    // ── 6. Process Gap Fill with Z-modulation ────────────────────────────────
+    ExtrusionEntityCollection temp_gap_fill;
+    this->_create_gap_fill(surface, params, &temp_gap_fill);
+
+    for (ExtrusionEntity* entity : temp_gap_fill.entities) {
+        auto* path = dynamic_cast<ExtrusionPath*>(entity);
+        if (!path || path->polyline.size() < 2)
+            continue;
+
+        Polyline poly2d     = path->polyline.to_polyline();
+        double total_len_mm = 0.0;
+        for (size_t i = 1; i < poly2d.size(); ++i) {
+            Vec2d a = unscale(poly2d.points[i - 1]);
+            Vec2d b = unscale(poly2d.points[i]);
+            total_len_mm += (b - a).norm();
+        }
+
+        if (total_len_mm < 1e-6)
+            continue;
+
+        // Recalculate global Z boundaries for gap fill
+        const double max_z_up        = z_amp_frac * layer_h * taper_scale;
+        const double z_overlap_pct   = params.config ? params.config->flow_weaving_z_overlap.value : 0.0;
+        const double overlap_tapered = -(layer_h * z_overlap_pct / 100.0) * taper_scale;
+        const double first_layer_h   = this->print_config ? this->print_config->initial_layer_print_height.value : layer_h;
+        const double absolute_floor  = -(this->z - first_layer_h);
+        const double min_z_diff      = std::max(overlap_tapered, absolute_floor);
+
+        double pos_mm = 0.0;
+        for (size_t seg = 0; seg < poly2d.size() - 1; ++seg) {
+            const Point& pa = poly2d.points[seg];
+            const Point& pb = poly2d.points[seg + 1];
+
+            Vec2d a           = unscale(pa);
+            Vec2d b           = unscale(pb);
+            double seg_len_mm = (b - a).norm();
+
+            if (seg_len_mm < 1e-9) {
+                pos_mm += seg_len_mm;
+                continue;
+            }
+
+            int n_steps = std::max(1, static_cast<int>(std::ceil(seg_len_mm / step_mm)));
+
+            for (int step = 0; step < n_steps; ++step) {
+                double t_start = static_cast<double>(step) / n_steps;
+                double t_end   = static_cast<double>(step + 1) / n_steps;
+                double t_mid   = (t_start + t_end) * 0.5;
+
+                double sub_start_pos = pos_mm + seg_len_mm * t_start;
+                double sub_end_pos   = pos_mm + seg_len_mm * t_end;
+                double sub_mid_pos   = pos_mm + seg_len_mm * t_mid;
+
+                Vec2d base_start = a + (b - a) * t_start;
+                Vec2d base_end   = a + (b - a) * t_end;
+                Vec2d base_mid   = a + (b - a) * t_mid;
+
+                const double sp_start = base_start.dot(fill_dir);
+                const double sp_end   = base_end.dot(fill_dir);
+                const double sp_mid   = base_mid.dot(fill_dir);
+
+                const double t_mod_z_start = modulator->compute(sp_start, period_mm, z_phase_rad);
+                const double t_mod_z_end   = modulator->compute(sp_end, period_mm, z_phase_rad);
+
+                double taper_val = modulator->taper(sub_mid_pos, total_len_mm, taper_len_mm);
+                Point base_mid_pt(coord_t(std::round(base_mid.x() / SCALING_FACTOR)), coord_t(std::round(base_mid.y() / SCALING_FACTOR)));
+
+                double combined_taper = taper_val;
+
+                double gate = 1.0;
+                if (have_safe_zone) {
+                    bool inside = false;
+                    for (const ExPolygon& ep : safe_zone) {
+                        if (ep.contains(base_mid_pt)) {
+                            inside = true;
+                            break;
+                        }
+                    }
+                    if (inside) {
+                        double dist_to_safe_boundary_mm    = min_dist_to_boundary_mm(base_mid_pt, safe_zone);
+                        constexpr double transition_len_mm = 1.0;
+                        if (dist_to_safe_boundary_mm < transition_len_mm) {
+                            double x = dist_to_safe_boundary_mm / transition_len_mm;
+                            gate     = x * x * (3.0 - 2.0 * x);
+                        } else {
+                            gate = 1.0;
+                        }
+                    } else {
+                        gate = 0.0;
+                    }
+                }
+
+                // Z modulation for Gap Fill (identical to main infill)
+                double z_start = z_amp_frac * layer_h * t_mod_z_start * combined_taper * gate * taper_scale;
+                double z_end   = z_amp_frac * layer_h * t_mod_z_end * combined_taper * gate * taper_scale;
+
+                z_start = std::max(z_start, min_z_diff);
+                z_end   = std::max(z_end, min_z_diff);
+                z_start = std::min(z_start, max_z_up);
+                z_end   = std::min(z_end, max_z_up);
+
+                Polyline3 pl3;
+                pl3.points.reserve(2);
+                Point pt_start(coord_t(std::round(base_start.x() / SCALING_FACTOR)), coord_t(std::round(base_start.y() / SCALING_FACTOR)));
+                Point pt_end(coord_t(std::round(base_end.x() / SCALING_FACTOR)), coord_t(std::round(base_end.y() / SCALING_FACTOR)));
+                pl3.points.push_back(Point3(int64_t(pt_start.x()), int64_t(pt_start.y()), int64_t(0)));
+                pl3.points.push_back(Point3(int64_t(pt_end.x()), int64_t(pt_end.y()), int64_t(0)));
+
+                std::vector<double> z_diffs = {z_start, z_end};
+                ExtrusionPath base_path(path->role(), path->mm3_per_mm, path->width, path->height);
+                base_path.z_contoured = true;
+
+                auto* contoured = new ExtrusionPathContoured(std::move(pl3), base_path, std::move(z_diffs));
+                eec->entities.push_back(contoured);
+            }
+            pos_mm += seg_len_mm;
+        }
+    }
 }
 
 } // namespace Slic3r

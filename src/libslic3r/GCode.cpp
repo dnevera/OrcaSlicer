@@ -7038,7 +7038,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else if (path.role() == erTopSolidInfill) {
             speed = m_config.get_abs_value("top_surface_speed");
         } else if (path.role() == erIroning) {
-            speed = m_config.get_abs_value("ironing_speed");
+            // FlowWeaving ironing pass has z_contoured=true → use its own speed parameter.
+            speed = path.z_contoured
+                ? m_config.get_abs_value("flow_weaving_ironing_speed")
+                : m_config.get_abs_value("ironing_speed");
         } else if (path.role() == erBottomSurface) {
             speed = m_config.get_abs_value("initial_layer_infill_speed");
         } else if (path.role() == erGapFill) {
@@ -7515,16 +7518,21 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     if (path.z_contoured) {
                         // ZAA: Z anti-aliased extrusion with variable Z per point
                         Vec2d dest2d = this->point_to_gcode(line.b.to_point());
-                        coordf_t z_diff = unscale_(line.b.z());
+                        // Use average of start and end Z-diff for extrusion compensation.
+                        // The cross-section height varies linearly from z_diff_a to z_diff_b
+                        // along the segment, so the correct volume = width * avg_height * length.
+                        coordf_t z_diff_a   = unscale_(line.a.z());
+                        coordf_t z_diff_b   = unscale_(line.b.z());
+                        coordf_t z_diff_avg = (z_diff_a + z_diff_b) * 0.5;
 
                         double extrusion_ratio = 1;
                         if (path.role() != erIroning) {
-                            extrusion_ratio = (path.height + z_diff) / path.height;
+                            extrusion_ratio = (path.height + z_diff_avg) / path.height;
                         }
 
                         double e = dE * extrusion_ratio;
 
-                        double z = m_nominal_z + z_diff;
+                        double z = m_nominal_z + z_diff_b;  // Z destination = endpoint
                         if (z < 0.1) {
                             throw RuntimeError("GCode: very low z");
                         }
@@ -7722,6 +7730,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             }
             if (path.z_contoured) {
                 Vec2d    dest2d = p.head<2>();
+                // Use average of start and end Z-diff for extrusion compensation.
+                // Variable-speed path: processed_point carries endpoint Z; start Z from
+                // previous iteration is approximated by the prev point's z_diff.
+                // For simplicity, use endpoint z_diff (variable-speed segments are very short).
                 coordf_t z_diff = unscale_(processed_point.p.z());
 
                 double extrusion_ratio = 1;
