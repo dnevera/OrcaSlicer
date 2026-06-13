@@ -47,6 +47,10 @@ public:
         const FillParams&       params,
         ExtrusionEntitiesPtr&   out) override;
 
+    bool can_filter_gcode() const override { return true; }
+    std::string filter_gcode(const std::string &gcode, const FullPrintConfig &config) const override;
+    void validate_gcode(const std::string &gcode, const FullPrintConfig &config) const override;
+
 protected:
     // Sub-segments per wave period (overridable for testing).
     virtual int subdivisions_per_period() const { return 8; }

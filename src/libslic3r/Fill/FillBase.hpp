@@ -183,6 +183,11 @@ public:
     // fill_surface_extrusion() at full density (e.g. FlowWeaving must run at any density).
     virtual bool handles_solid_internal() const { return false; }
 
+    // G-code post-processing and validation API for infills
+    virtual bool can_filter_gcode() const { return false; }
+    virtual std::string filter_gcode(const std::string &gcode, const FullPrintConfig &config) const { return gcode; }
+    virtual void validate_gcode(const std::string &gcode, const FullPrintConfig &config) const {}
+
     virtual bool is_self_crossing() = 0;
 
     // Return true if infill has a consistent pattern between layers.

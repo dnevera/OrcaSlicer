@@ -19,6 +19,7 @@
 
 #include "FillFlowWeaving.hpp"
 #include "FlowWeavingZModulator.hpp"
+#include "../../Exception.hpp"
 
 #include "../../ClipperUtils.hpp"
 #include "../../ExPolygon.hpp"
@@ -454,6 +455,9 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 ExtrusionPath base_path(params.extrusion_role, sub_mm3, mod_width, params.flow.height());
 
                 base_path.z_contoured = true;
+                base_path.speed_config_key = "flow_weaving_speed";
+                base_path.scale_flow_by_z = false;
+                base_path.can_use_arc_fitting = false;
 
                 // Polyline3: 2 points with Z offsets encoded in .z()
                 Polyline3 pl3;
@@ -468,14 +472,17 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 auto* contoured = new ExtrusionPathContoured(std::move(pl3), base_path, std::move(z_diffs));
                 eec->entities.push_back(contoured);
 
-                // ── Разглаживающий проход (Ironing) ──────────────────────────
+                // ── Ironing Pass ─────────────────────────────────────────────
                 if (generate_ironing) {
-                    const double ironing_mm3  = flow_mm3_per_mm * 0.15; // 15% поток
+                    const double ironing_mm3  = flow_mm3_per_mm * 0.15; // 15% flow
                     const float ironing_width = float(flow_width);
                     // Intentionally uses params.extrusion_role (erInternalInfill) with z_contoured=true
                     // so GCode.cpp selects flow_weaving_speed for this pass, not ironing_speed.
-                    ExtrusionPath ironing_base_path(params.extrusion_role, ironing_mm3, ironing_width, params.flow.height());
-                    ironing_base_path.z_contoured = true;
+                    ExtrusionPath ironing_base_path(erIroning, ironing_mm3, ironing_width, params.flow.height());
+                    ironing_base_path.z_contoured = false;
+                    ironing_base_path.speed_config_key = "flow_weaving_ironing_speed";
+                    ironing_base_path.scale_flow_by_z = false;
+                    ironing_base_path.can_use_arc_fitting = true;
 
                     Polyline3 ironing_pl3;
                     ironing_pl3.points.reserve(2);
@@ -616,12 +623,50 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
                 std::vector<double> z_diffs = {z_start, z_end};
                 ExtrusionPath base_path(path->role(), path->mm3_per_mm, path->width, path->height);
                 base_path.z_contoured = true;
+                base_path.speed_config_key = "flow_weaving_speed";
+                base_path.scale_flow_by_z = false;
+                base_path.can_use_arc_fitting = false;
 
                 auto* contoured = new ExtrusionPathContoured(std::move(pl3), base_path, std::move(z_diffs));
                 eec->entities.push_back(contoured);
             }
             pos_mm += seg_len_mm;
         }
+    }
+}
+
+std::string FillFlowWeaving::filter_gcode(const std::string &gcode, const FullPrintConfig &config) const
+{
+    // No-op for now; could be used for injecting machine-specific dynamic pressure/speed limits.
+    return gcode;
+}
+
+void FillFlowWeaving::validate_gcode(const std::string &gcode, const FullPrintConfig &config) const
+{
+    // Validate that Z coordinates remain within safe print boundaries
+    size_t pos = 0;
+    while ((pos = gcode.find('Z', pos)) != std::string::npos) {
+        size_t line_start = gcode.rfind('\n', pos);
+        if (line_start == std::string::npos) {
+            line_start = 0;
+        } else {
+            line_start += 1;
+        }
+        std::string line = gcode.substr(line_start, pos - line_start + 10);
+        if (line.find("G0") != std::string::npos || line.find("G1") != std::string::npos ||
+            line.find("G2") != std::string::npos || line.find("G3") != std::string::npos) {
+            char* endptr = nullptr;
+            double z_val = std::strtod(gcode.c_str() + pos + 1, &endptr);
+            if (endptr != gcode.c_str() + pos + 1) {
+                if (z_val < 0.0) {
+                    throw Slic3r::SlicingError("FlowWeaving: Z coordinate goes below print bed! Z = " + std::to_string(z_val));
+                }
+                if (z_val > 500.0) {
+                    throw Slic3r::SlicingError("FlowWeaving: Z coordinate exceeds maximum print height! Z = " + std::to_string(z_val));
+                }
+            }
+        }
+        pos += 1;
     }
 }
 

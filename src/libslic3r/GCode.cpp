@@ -9,6 +9,8 @@
 #include "VortekGCode.hpp"
 #include "Exception.hpp"
 #include "ExtrusionEntity.hpp"
+#include "Fill/FillBase.hpp"
+#include <set>
 #include "EdgeGrid.hpp"
 #include "Geometry/ConvexHull.hpp"
 #include "GCode/PrintExtents.hpp"
@@ -3930,6 +3932,24 @@ void GCode::process_layers(
     const std::vector<std::pair<coordf_t, std::vector<LayerToPrint>>>   &layers_to_print,
     GCodeOutputStream                                                   &output_stream)
 {
+    // Collect active infill processors
+    std::vector<std::unique_ptr<Fill>> infill_processors;
+    {
+        std::set<InfillPattern> active_patterns;
+        for (const auto* object : print.objects()) {
+            for (size_t region_id = 0; region_id < object->num_printing_regions(); ++region_id) {
+                const PrintRegion &region = object->printing_region(region_id);
+                InfillPattern pattern = region.config().sparse_infill_pattern.value;
+                if (active_patterns.insert(pattern).second) {
+                    std::unique_ptr<Fill> f(Fill::new_from_type(pattern));
+                    if (f && f->can_filter_gcode()) {
+                        infill_processors.push_back(std::move(f));
+                    }
+                }
+            }
+        }
+    }
+
     // The pipeline is variable: The vase mode filter is optional.
     size_t layer_to_print_idx = 0;
     const auto generator = tbb::make_filter<void, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
@@ -3986,6 +4006,15 @@ void GCode::process_layers(
             }
         );
     
+    const auto infill_post_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
+        [&infill_processors, &config = this->config()](std::string in) -> std::string {
+            for (const auto& processor : infill_processors) {
+                in = processor->filter_gcode(in, config);
+                processor->validate_gcode(in, config);
+            }
+            return in;
+        });
+
     const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
         [&output_stream](std::string s) { output_stream.write(s); }
     );
@@ -4012,13 +4041,13 @@ void GCode::process_layers(
 
     // The pipeline elements are joined using const references, thus no copying is performed.
     if (m_spiral_vase && m_pressure_equalizer)
-        tbb::parallel_pipeline(12, generator & spiral_mode & pressure_equalizer & cooling & fan_mover & output);
+        tbb::parallel_pipeline(12, generator & spiral_mode & pressure_equalizer & cooling & fan_mover & infill_post_filter & output);
     else if (m_spiral_vase)
-    	tbb::parallel_pipeline(12, generator & spiral_mode & cooling & fan_mover & output);
+    	tbb::parallel_pipeline(12, generator & spiral_mode & cooling & fan_mover & infill_post_filter & output);
     else if	(m_pressure_equalizer)
-        tbb::parallel_pipeline(12, generator & pressure_equalizer & cooling & fan_mover & pa_processor_filter & output);
+        tbb::parallel_pipeline(12, generator & pressure_equalizer & cooling & fan_mover & pa_processor_filter & infill_post_filter & output);
     else
-    	tbb::parallel_pipeline(12, generator & cooling & fan_mover & pa_processor_filter & output);
+    	tbb::parallel_pipeline(12, generator & cooling & fan_mover & pa_processor_filter & infill_post_filter & output);
 
 }
 
@@ -4034,6 +4063,24 @@ void GCode::process_layers(
     // BBS
     const bool                               prime_extruder)
 {
+    // Collect active infill processors
+    std::vector<std::unique_ptr<Fill>> infill_processors;
+    {
+        std::set<InfillPattern> active_patterns;
+        for (const auto* object : print.objects()) {
+            for (size_t region_id = 0; region_id < object->num_printing_regions(); ++region_id) {
+                const PrintRegion &region = object->printing_region(region_id);
+                InfillPattern pattern = region.config().sparse_infill_pattern.value;
+                if (active_patterns.insert(pattern).second) {
+                    std::unique_ptr<Fill> f(Fill::new_from_type(pattern));
+                    if (f && f->can_filter_gcode()) {
+                        infill_processors.push_back(std::move(f));
+                    }
+                }
+            }
+        }
+    }
+
     // The pipeline is variable: The vase mode filter is optional.
     size_t layer_to_print_idx = 0;
     const auto generator = tbb::make_filter<void, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
@@ -4086,6 +4133,15 @@ void GCode::process_layers(
         }
     );
     
+    const auto infill_post_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
+        [&infill_processors, &config = this->config()](std::string in) -> std::string {
+            for (const auto& processor : infill_processors) {
+                in = processor->filter_gcode(in, config);
+                processor->validate_gcode(in, config);
+            }
+            return in;
+        });
+
     const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
         [&output_stream](std::string s) { output_stream.write(s); }
     );
@@ -4110,13 +4166,13 @@ void GCode::process_layers(
 
     // The pipeline elements are joined using const references, thus no copying is performed.
     if (m_spiral_vase && m_pressure_equalizer)
-        tbb::parallel_pipeline(12, generator & spiral_mode & pressure_equalizer & cooling & fan_mover & output);
+        tbb::parallel_pipeline(12, generator & spiral_mode & pressure_equalizer & cooling & fan_mover & infill_post_filter & output);
     else if (m_spiral_vase)
-    	tbb::parallel_pipeline(12, generator & spiral_mode & cooling & fan_mover & output);
+    	tbb::parallel_pipeline(12, generator & spiral_mode & cooling & fan_mover & infill_post_filter & output);
     else if	(m_pressure_equalizer)
-        tbb::parallel_pipeline(12, generator & pressure_equalizer & cooling & fan_mover & pa_processor_filter & output);
+        tbb::parallel_pipeline(12, generator & pressure_equalizer & cooling & fan_mover & pa_processor_filter & infill_post_filter & output);
     else
-    	tbb::parallel_pipeline(12, generator & cooling & fan_mover & pa_processor_filter & output);
+    	tbb::parallel_pipeline(12, generator & cooling & fan_mover & pa_processor_filter & infill_post_filter & output);
 }
 
 std::string GCode::placeholder_parser_process(const std::string &name, const std::string &templ, unsigned int current_filament_id, const DynamicConfig *config_override)
@@ -7006,7 +7062,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     // set speed
     if (speed == -1) {
-        if (path.role() == erPerimeter) {
+        if (!path.speed_config_key.empty()) {
+            speed = m_config.get_abs_value(path.speed_config_key);
+        } else if (path.role() == erPerimeter) {
             speed = m_config.get_abs_value("inner_wall_speed");
             if (sloped) {
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("inner_wall_speed")));
@@ -7032,16 +7090,13 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else if (path.role() == erSupportTransition || path.role() == erBridgeInfill) {
             speed = m_config.get_abs_value("bridge_speed");
         } else if (path.role() == erInternalInfill) {
-            speed = path.z_contoured ? m_config.get_abs_value("flow_weaving_speed") : m_config.get_abs_value("sparse_infill_speed");
+            speed = m_config.get_abs_value("sparse_infill_speed");
         } else if (path.role() == erSolidInfill) {
             speed = m_config.get_abs_value("internal_solid_infill_speed");
         } else if (path.role() == erTopSolidInfill) {
             speed = m_config.get_abs_value("top_surface_speed");
         } else if (path.role() == erIroning) {
-            // FlowWeaving ironing pass has z_contoured=true → use its own speed parameter.
-            speed = path.z_contoured
-                ? m_config.get_abs_value("flow_weaving_ironing_speed")
-                : m_config.get_abs_value("ironing_speed");
+            speed = m_config.get_abs_value("ironing_speed");
         } else if (path.role() == erBottomSurface) {
             speed = m_config.get_abs_value("initial_layer_infill_speed");
         } else if (path.role() == erGapFill) {
@@ -7495,7 +7550,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             }
             // BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode or we are doing sloped extrusion
             // Attention: G2 and G3 is not supported in spiral_mode mode
-            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || path.z_contoured) {
+            if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr || !path.can_use_arc_fitting) {
                 double path_length = 0.;
                 double total_length = sloped == nullptr ? 0. : path.polyline.length() * SCALING_FACTOR;
                 double saved_z      = m_writer.get_position().z();
@@ -7526,7 +7581,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                         coordf_t z_diff_avg = (z_diff_a + z_diff_b) * 0.5;
 
                         double extrusion_ratio = 1;
-                        if (path.role() != erIroning) {
+                        if (path.scale_flow_by_z) {
                             extrusion_ratio = (path.height + z_diff_avg) / path.height;
                         }
 
@@ -7737,7 +7792,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 coordf_t z_diff = unscale_(processed_point.p.z());
 
                 double extrusion_ratio = 1;
-                if (path.role() != erIroning) {
+                if (path.scale_flow_by_z) {
                     extrusion_ratio = (path.height + z_diff) / path.height;
                 }
 

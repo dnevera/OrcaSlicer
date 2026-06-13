@@ -107,3 +107,31 @@ After compilation, verify the behavior of these parameters as follows:
 ### Specimen B (Horizontal Specimen - Cube 118 configuration)
 * **Settings:** `flow_weaving_taper_length = 1.2 mm`, `flow_weaving_wall_overlap = 0.15 mm`.
 * **Verification:** Destructive testing ("breaking the part") should result in a cohesive material failure (tearing of the polymer strands) rather than a clean adhesive separation between the infill block and the outer shell.
+
+---
+
+## 6. Top Surface Quality & Perimeter Ridge Defect Resolution
+
+### A. Defect Identification
+During test prints with global top ironing enabled, a major surface defect was observed:
+1. The **middle section** of the top surface was noticeably depressed (sunken and rough).
+2. The **perimeters (borders)** of the top surface had prominent raised ridges of excess plastic ("выступы/вылеты"), which disrupted the flatness of the ironing pass.
+
+### B. Root Cause Analysis: Flow Over-compensation Loop
+The defect is caused by a mathematical mismatch between the slicer's volumetric flow scaling and the physical gap between layered waves:
+
+1. **Wavy Bottom Layer (Constant Gap)**: During steady-state Weaving (using the `trough-into-trough` phase strategy), the nozzle moves in Z, but it prints over a layer that has the *exact same* wave pattern. Consequently, the actual physical gap between the nozzle and the layer below is **constant** and equal to the nominal layer height $h$:
+   $$\text{gap}(x) = z_{\text{curr}}(x) - z_{\text{prev}}(x) = h + (A_{\text{curr}} - A_{\text{prev}}) \cdot \sin(\theta) = h \quad (\text{since } A_{\text{curr}} = A_{\text{prev}})$$
+2. **Incorrect Volumetric Scaling**: The standard G-code generator (`GCode.cpp`) assumed that any Z movement occurs over a flat base, scaling the flow dynamically by the current layer's Z offset:
+   $$\text{extrusion\_ratio} = \frac{h + \Delta z}{h}$$
+   This resulted in massive over-extrusion at the peaks (up to **1.55x** flow) and under-extrusion at the valleys (down to **0.45x** flow), even though the physical gap was uniform.
+3. **Plowing and Accumulation**: The nozzle plowed through the over-extruded peaks, dragging the hot excess plastic along the zigzag path and dumping it at the path endpoints (near the walls and safe-zone boundaries). This created the raised border ridges. The under-extruded valleys became voids, causing the middle section to sink.
+4. **Transition Mismatch**: During top taper layers where the wave amplitude decreases ($A_{\text{curr}} < A_{\text{prev}}$), the required flow is $< 1$ at the peaks to account for the smaller gap. However, the slicer extruded $> 1$, causing extreme over-extrusion precisely where the surface was supposed to be flattened.
+
+### C. Resolution: Constant Volumetric Flow (`scale_flow_by_z = false`)
+To resolve this, we introduced the path-level property `scale_flow_by_z` in `ExtrusionPath` and disabled it (`false`) for all FlowWeaving infill and gap fill paths:
+
+* **Scarf Joints and Adaptive Layers**: Keep `scale_flow_by_z = true` by default, preserving necessary flow scaling where the toolhead ramps up/down over a flat base.
+* **FlowWeaving**: Explicitly set `scale_flow_by_z = false`.
+* **Result**: Flow remains constant (nominal) throughout the wave. Z-weaving and mechanical interlocking are created purely geometrically by the Z-axis displacement (which squashes the line in valleys and relaxes it at peaks). This completely eliminates the over-extrusion loop, nozzle plowing, and border ridges, achieving a flat, clean top surface.
+
