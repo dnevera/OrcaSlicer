@@ -1380,8 +1380,10 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                                     if (surface.surface_type == stInternal || 
                                         (surface.surface_type == stInternalSolid && 
                                          lr->region().config().sparse_infill_density.value >= 99.0)) {
-                                        has_flow_weaving_infill = true;
-                                        break;
+                                        if (expoly.overlaps(surface.expolygon)) {
+                                            has_flow_weaving_infill = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }

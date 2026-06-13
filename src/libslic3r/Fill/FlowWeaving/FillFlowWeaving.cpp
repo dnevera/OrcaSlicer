@@ -101,6 +101,61 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             ironing_enabled = v->value;
     }
 
+    // ── Taper scale ──────────────────────────────────────────────────────────
+    double taper_scale = 1.0;
+    if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
+        taper_scale = 0.0;
+    } else if (top_taper_n > 0) {
+        const double x = std::min(static_cast<double>(this->infill_layers_above - top_taper_n + 1) / static_cast<double>(top_taper_n),
+                                  1.0);
+        taper_scale    = x * x * (3.0 - 2.0 * x); // smoothstep ∈ [0, 1]
+    }
+
+    // ── Fast path: taper_scale == 0 → delegate completely to FillRectilinear ──
+    if (taper_scale == 0.0) {
+        FillParams local_params = params;
+        if (surface->is_solid()) {
+            if (surface->is_top()) {
+                local_params.extrusion_role = erTopSolidInfill;
+            } else if (surface->is_bottom()) {
+                local_params.extrusion_role = erBottomSurface;
+            } else {
+                local_params.extrusion_role = erSolidInfill;
+            }
+        }
+        
+        size_t orig_size = out.size();
+        FillRectilinear::fill_surface_extrusion(surface, local_params, out);
+        
+        const bool generate_ironing = (top_taper_n > 0 && this->infill_layers_above == 0 && ironing_enabled);
+        if (generate_ironing && out.size() > orig_size) {
+            ExtrusionEntityCollection* ironing_eec = new ExtrusionEntityCollection();
+            ironing_eec->no_sort = this->no_sort();
+            
+            for (size_t i = orig_size; i < out.size(); ++i) {
+                if (auto* eec = dynamic_cast<ExtrusionEntityCollection*>(out[i])) {
+                    for (auto* entity : eec->entities) {
+                        if (auto* path = dynamic_cast<ExtrusionPath*>(entity)) {
+                            ExtrusionPath ironing_path(erIroning,
+                                                       path->mm3_per_mm * 0.15,
+                                                       path->width,
+                                                       path->height);
+                            ironing_path.polyline = path->polyline;
+                            ironing_eec->entities.push_back(new ExtrusionPath(std::move(ironing_path)));
+                        }
+                    }
+                }
+            }
+            
+            if (!ironing_eec->entities.empty()) {
+                out.push_back(ironing_eec);
+            } else {
+                delete ironing_eec;
+            }
+        }
+        return;
+    }
+
     const double z_amp_frac  = z_amp_pct / 100.0;
     const double xy_amp_frac = xy_amp / 100.0;
     const double layer_h     = (params.layer_height > 0.0) ? params.layer_height : params.flow.height();
