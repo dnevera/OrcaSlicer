@@ -4576,7 +4576,7 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Z weaving amplitude");
     def->category = L("Strength");
     def->tooltip  = L("Height of Z oscillation as percentage of layer height.\n"
-                      "Recommended: 20-30% for standard layer heights (e.g., 0.2 mm).\n"
+                      "Recommended: 20-30% for PLA, 30-35% for engineering plastics (PA-CF, ABS).\n"
                       "Lower than 15% offers poor interlocking.\n"
                       "Higher than 50% may cause the extruded path to lose contact with the previous layer, leading to loose loops and excessive flow spikes.");
     def->sidetext = L("%");
@@ -4590,6 +4590,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("Amplitude of line width modulation as percentage of flow width.\n"
                       "Recommended: 5-15% (stable flow, clean walls).\n"
+                      "For highly viscous engineering materials (like PA-CF), keep this low (5-10%) to prevent nozzle clogging and extrusion pressure lag.\n"
                       "Values >30% may lead to extrusion lag, voids, or blobs due to pressure pulses.\n"
                       "Effective width is clamped between 25% of flow width and nozzle diameter.");
     def->sidetext = L("%");
@@ -4617,7 +4618,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("Distance between wave peaks in mm.\n"
                       "Shorter = tighter interlocking but dramatically increases Z-axis oscillation frequency.\n"
-                      "Recommended: 3.0-5.0 mm to keep Z-axis motor within safe limits (under 30-40 Hz) and prevent step loss.");
+                      "Recommended: 3.0-5.0 mm. For engineering prints or heavy beds, use larger periods (4.5-5.0 mm) to keep Z-axis motor within safe limits (under 30-40 Hz) and prevent step loss.");
     def->sidetext = L("mm");
     def->min      = 0.5;
     def->max      = 20.0;
@@ -4656,7 +4657,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip  = L("How far the nozzle may press into the previous layer during Z-modulation,\n"
                       "expressed as a percentage of the layer height.\n"
-                      "Recommended: 20-25% for optimal interlayer fusion.\n"
+                      "Recommended: 20-25% for PLA, 25-30% for engineering plastics (PA-CF) to maximize inter-layer thermal fusion.\n"
                       "Less than 10% has negligible effect.\n"
                       "More than 35% causes nozzle scraping, nozzle vibrations, and plastic build-up on the heater block.");
     def->sidetext = L("% of layer height");
@@ -4684,7 +4685,7 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Flow weaving speed");
     def->category = L("Speed");
     def->tooltip  = L("Speed of flow weaving infill.\n"
-                      "Slower speed (30-60 mm/s) is highly recommended to prevent Z-axis step loss due to constant oscillation.");
+                      "Slower speed (30-60 mm/s) is highly recommended (especially for engineering plastics printed with hardened nozzles) to prevent Z-axis step loss and ensure complete melting.");
     def->sidetext = L("mm/s");
     def->min      = 1;
     def->mode     = comAdvanced;
