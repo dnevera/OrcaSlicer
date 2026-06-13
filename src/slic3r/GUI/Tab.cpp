@@ -2517,6 +2517,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("flow_weaving_speed");
         optgroup->append_single_option_line("flow_weaving_taper_length");
         optgroup->append_single_option_line("flow_weaving_wall_overlap");
+        optgroup->append_single_option_line("flow_weaving_ironing");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");

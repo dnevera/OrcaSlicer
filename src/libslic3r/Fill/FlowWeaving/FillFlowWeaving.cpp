@@ -77,6 +77,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     double z_phase_offset = 0.0;                    // Z wave phase between layers
     double taper_len_mm   = DEFAULT_TAPER_LENGTH_MM;
     double wall_overlap   = DEFAULT_WALL_OVERLAP_MM;
+    bool ironing_enabled  = true;
+    int top_taper_n       = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
 
     if (params.config) {
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_z_amplitude"))
@@ -95,6 +97,8 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
             taper_len_mm = v->value;
         if (const auto* v = params.config->option<ConfigOptionFloat>("flow_weaving_wall_overlap"))
             wall_overlap = v->value;
+        if (const auto* v = params.config->option<ConfigOptionBool>("flow_weaving_ironing"))
+            ironing_enabled = v->value;
     }
 
     const double z_amp_frac  = z_amp_pct / 100.0;
@@ -124,6 +128,13 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
     ExtrusionEntityCollection* eec = nullptr;
     out.push_back(eec = new ExtrusionEntityCollection());
     eec->no_sort = this->no_sort();
+
+    ExtrusionEntityCollection* ironing_eec = nullptr;
+    const bool generate_ironing = (top_taper_n > 0 && this->infill_layers_above == 0 && ironing_enabled);
+    if (generate_ironing) {
+        ironing_eec = new ExtrusionEntityCollection();
+        ironing_eec->no_sort = this->no_sort();
+    }
 
     // ── 4. Modulator ─────────────────────────────────────────────────────────
     auto modulator = FlowWeavingModulator::create(ModulatorType::Sine);
@@ -200,7 +211,7 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
         // With top_taper_n=4: last 4 infill layers flat, then 4 layers of fade.
         // This ensures the top surface is free of Z-wave artifacts even at
         // short periods (0.5mm) where Z-ripples telegraph through thin top shells.
-        const int top_taper_n = params.config ? params.config->flow_weaving_top_taper_layers.value : 0;
+        // Using top_taper_n defined at the beginning of the function
         double taper_scale    = 1.0;
         if (top_taper_n > 0 && this->infill_layers_above < top_taper_n) {
             // Hard disable: last top_taper_n infill layers print flat
@@ -403,9 +414,36 @@ void FillFlowWeaving::fill_surface_extrusion(const Surface* surface, const FillP
 
                 auto* contoured = new ExtrusionPathContoured(std::move(pl3), base_path, std::move(z_diffs));
                 eec->entities.push_back(contoured);
+
+                // ── Разглаживающий проход (Ironing) ──────────────────────────
+                if (generate_ironing) {
+                    const double ironing_mm3 = flow_mm3_per_mm * 0.15; // 15% поток
+                    const float ironing_width = float(flow_width);
+                    ExtrusionPath ironing_base_path(params.extrusion_role, ironing_mm3, ironing_width, params.flow.height());
+                    ironing_base_path.z_contoured = true;
+
+                    Polyline3 ironing_pl3;
+                    ironing_pl3.points.reserve(2);
+                    Point pt_iron_start(coord_t(std::round(base_start.x() / SCALING_FACTOR)), coord_t(std::round(base_start.y() / SCALING_FACTOR)));
+                    Point pt_iron_end(coord_t(std::round(base_end.x() / SCALING_FACTOR)), coord_t(std::round(base_end.y() / SCALING_FACTOR)));
+                    ironing_pl3.points.push_back(Point3(int64_t(pt_iron_start.x()), int64_t(pt_iron_start.y()), int64_t(0)));
+                    ironing_pl3.points.push_back(Point3(int64_t(pt_iron_end.x()), int64_t(pt_iron_end.y()), int64_t(0)));
+
+                    std::vector<double> ironing_z_diffs = {0.0};
+                    auto* ironing_contoured = new ExtrusionPathContoured(std::move(ironing_pl3), ironing_base_path, std::move(ironing_z_diffs));
+                    ironing_eec->entities.push_back(ironing_contoured);
+                }
             }
 
             pos_mm += seg_len_mm;
+        }
+    }
+
+    if (ironing_eec) {
+        if (!ironing_eec->entities.empty()) {
+            out.push_back(ironing_eec);
+        } else {
+            delete ironing_eec;
         }
     }
 

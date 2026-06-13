@@ -4676,7 +4676,7 @@ void PrintConfigDef::init_fff_params()
                       "Taper follows smoothstep: slow at start, fast in middle, slow at end.");
     def->sidetext = L("layers");
     def->min      = 0;
-    def->max      = 20;
+    def->max      = 10;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionInt(4));
 
@@ -4714,6 +4714,18 @@ void PrintConfigDef::init_fff_params()
     def->max      = 1.0;
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def           = this->add("flow_weaving_ironing", coBool);
+    def->label    = L("Weaving top ironing");
+    def->category = L("Strength");
+    def->tooltip  = L("Applies a flat, non-oscillating ironing pass (with 15% flow) to the topmost\n"
+                      "flat infill layer directly beneath the top solid shell.\n"
+                      "This melts and flattens out any remaining wave peaks telegraphed from lower layers,\n"
+                      "creating a perfectly smooth foundation for the top cover.\n"
+                      "Highly recommended for solid prints. Can be disabled inside modifier volumes\n"
+                      "where ironing at internal boundaries is not needed and wastes print time.");
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(true));
 
     def = this->add("zaa_min_z", coFloat);
     def->label    = L("Minimum z height");

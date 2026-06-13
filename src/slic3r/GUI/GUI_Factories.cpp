@@ -154,6 +154,7 @@ std::map<std::string, std::vector<SimpleSettingData>> SettingsFactory::PART_CATE
        {"flow_weaving_z_overlap", "", 1},
        {"flow_weaving_top_taper_layers", "", 1},
        {"flow_weaving_taper_length", "", 1},
+       {"flow_weaving_ironing", "", 1},
        {"flow_weaving_wall_overlap", "", 1}}},
      {L("Speed"),
       {{"outer_wall_speed", "", 1},

@@ -1407,6 +1407,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, flow_weaving_speed))
     ((ConfigOptionFloat, flow_weaving_taper_length))
     ((ConfigOptionFloat, flow_weaving_wall_overlap))
+    ((ConfigOptionBool,  flow_weaving_ironing))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

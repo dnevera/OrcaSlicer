@@ -1370,13 +1370,24 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
                 // Count consecutive infill layers above (for FlowWeaving top-surface taper).
                 {
                     int above_count = 0;
-                    constexpr int MAX_TAPER_LOOK = 20;
+                    constexpr int MAX_TAPER_LOOK = 10;
                     for (size_t li = layer_idx + 1;
                          li < layers.size() && above_count < MAX_TAPER_LOOK; ++li) {
-                        bool has_infill = false;
-                        for (const LayerRegion* lr : layers[li]->regions())
-                            if (!lr->fill_no_overlap_expolygons.empty()) { has_infill = true; break; }
-                        if (!has_infill) break;
+                        bool has_flow_weaving_infill = false;
+                        for (const LayerRegion* lr : layers[li]->regions()) {
+                            if (lr->region().config().sparse_infill_pattern.value == ipFlowWeaving) {
+                                for (const Surface& surface : lr->fill_surfaces.surfaces) {
+                                    if (surface.surface_type == stInternal || 
+                                        (surface.surface_type == stInternalSolid && 
+                                         lr->region().config().sparse_infill_density.value >= 99.0)) {
+                                        has_flow_weaving_infill = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (has_flow_weaving_infill) break;
+                        }
+                        if (!has_flow_weaving_infill) break;
                         ++above_count;
                     }
                     f->infill_layers_above = above_count;
