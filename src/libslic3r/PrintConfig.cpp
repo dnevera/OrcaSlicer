@@ -4576,9 +4576,11 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Z weaving amplitude");
     def->category = L("Strength");
     def->tooltip  = L("Height of Z oscillation as percentage of layer height.\n"
-                      "Recommended: 20-30% for PLA, 30-35% for engineering plastics (PA-CF, ABS).\n"
-                      "Lower than 15% offers poor interlocking.\n"
-                      "Higher than 50% may cause the extruded path to lose contact with the previous layer, leading to loose loops and excessive flow spikes.");
+                      "Adjust by material family:\n"
+                      "- Standard (PLA, PETG): 20-25% (low Z load, clean finish).\n"
+                      "- Engineering (ABS, ASA, PC): 25-30% (good balance of strength and surface).\n"
+                      "- Fiber-reinforced (PA-CF, PPA-CF, PPS-CF): 30-35% (high Z-adhesion compensation).\n"
+                      "Values >50% may cause lines to separate and loop.");
     def->sidetext = L("%");
     def->min      = 0;
     def->max      = 95;
@@ -4589,9 +4591,10 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("XY width modulation");
     def->category = L("Strength");
     def->tooltip  = L("Amplitude of line width modulation as percentage of flow width.\n"
-                      "Recommended: 5-15% (stable flow, clean walls).\n"
-                      "For highly viscous engineering materials (like PA-CF), keep this low (5-10%) to prevent nozzle clogging and extrusion pressure lag.\n"
-                      "Values >30% may lead to extrusion lag, voids, or blobs due to pressure pulses.\n"
+                      "Adjust by viscosity and flow behavior:\n"
+                      "- Standard (PLA, PETG): 10-15% (handles pressure fluctuations well).\n"
+                      "- Engineering (ABS, ASA, PC): 5-10% (avoid excessive pressure build-up).\n"
+                      "- Fiber-reinforced (PA-CF, PPA-CF, PPS-CF): 5% or 0% (highly viscous, fibers do not compress; keep flow constant to prevent clogging and gear grinding).\n"
                       "Effective width is clamped between 25% of flow width and nozzle diameter.");
     def->sidetext = L("%");
     def->min      = 0;
@@ -4617,8 +4620,11 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Weaving period");
     def->category = L("Strength");
     def->tooltip  = L("Distance between wave peaks in mm.\n"
-                      "Shorter = tighter interlocking but dramatically increases Z-axis oscillation frequency.\n"
-                      "Recommended: 3.0-5.0 mm. For engineering prints or heavy beds, use larger periods (4.5-5.0 mm) to keep Z-axis motor within safe limits (under 30-40 Hz) and prevent step loss.");
+                      "Shorter = tighter interlocking, but increases Z motor reversals frequency.\n"
+                      "Adjust by material & speed:\n"
+                      "- Standard (PLA/PETG @100mm/s): 3.0-4.0 mm.\n"
+                      "- Engineering (ABS/ASA @70mm/s): 4.0 mm.\n"
+                      "- Fiber-reinforced (PA-CF, PPA-CF, PPS-CF @50mm/s): 4.5-5.0 mm (reduces Z axis wear and motor heat on tough prints).");
     def->sidetext = L("mm");
     def->min      = 0.5;
     def->max      = 20.0;
@@ -4655,11 +4661,12 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("flow_weaving_z_overlap", coFloat);
     def->label    = L("Z overlap into previous layer");
     def->category = L("Strength");
-    def->tooltip  = L("How far the nozzle may press into the previous layer during Z-modulation,\n"
-                      "expressed as a percentage of the layer height.\n"
-                      "Recommended: 20-25% for PLA, 25-30% for engineering plastics (PA-CF) to maximize inter-layer thermal fusion.\n"
-                      "Less than 10% has negligible effect.\n"
-                      "More than 35% causes nozzle scraping, nozzle vibrations, and plastic build-up on the heater block.");
+    def->tooltip  = L("How far the nozzle presses into the previous layer at the wave troughs (% of layer height).\n"
+                      "Adjust for inter-layer bonding strength:\n"
+                      "- Standard (PLA, PETG): 15-20% (light squashing).\n"
+                      "- Engineering (ABS, ASA, PC): 20-25% (melts and keys layers together).\n"
+                      "- Fiber-reinforced (PA-CF, PPA-CF, PPS-CF): 25-30% (drives fibers into the layer below to bridge the Z gap).\n"
+                      "Values >35% cause nozzle dragging and plastic build-up.");
     def->sidetext = L("% of layer height");
     def->min      = 0;
     def->max      = 50;
@@ -4685,7 +4692,10 @@ void PrintConfigDef::init_fff_params()
     def->label    = L("Flow weaving speed");
     def->category = L("Speed");
     def->tooltip  = L("Speed of flow weaving infill.\n"
-                      "Slower speed (30-60 mm/s) is highly recommended (especially for engineering plastics printed with hardened nozzles) to prevent Z-axis step loss and ensure complete melting.");
+                      "Limits Z-axis oscillation rate and ensures complete polymer melting:\n"
+                      "- Standard (PLA, PETG): 80-120 mm/s.\n"
+                      "- Engineering (ABS, ASA, PC): 60-80 mm/s.\n"
+                      "- Fiber-reinforced (PA-CF, PPA-CF, PPS-CF): 40-50 mm/s (highly recommended for steel nozzles to prevent extrusion stalls).");
     def->sidetext = L("mm/s");
     def->min      = 1;
     def->mode     = comAdvanced;
