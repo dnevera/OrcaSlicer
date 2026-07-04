@@ -120,6 +120,11 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
 
     for (auto& elem : per_extruder_free_blocks) {
         int extruder_id = elem.first;
+        // Carousel detection: an extruder with more than one nozzle slot is a carousel.
+        // Galantcev PR f58acc2a56 operated on inject_cooling_heating_command() generically
+        // (no per-extruder type check). We split carousel handling into a dedicated path
+        // here so that the logic is explicit and cannot accidentally affect fixed nozzles.
+        // ExtruderType::Carousel does not exist in this codebase — use m_extruder_max_nozzle_count > 1.
         bool ext_is_carousel = (extruder_id >= 0 && extruder_id < (int)m_extruder_max_nozzle_count.size() && m_extruder_max_nozzle_count[extruder_id] > 1);
         auto& extruder_free_blocks = elem.second;
         for (auto iter = extruder_free_blocks.begin(); iter != extruder_free_blocks.end(); ++iter) {
@@ -133,11 +138,24 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
                         << " sentinel block (last_fil=-1) — nothing to cooldown");
                     continue;
                 }
-                // Hierarchy of carousel standby/park target temperature (no hardcoded constants):
-                //   1. filament_pre_cooling_temperature_nc (NC-specific park temp) — if configured in preset
-                //   2. idle_temperature (generic standby temp) — if configured in preset
-                //   3. room_temperature — if nothing is configured; in this case skip preheat
-                //      (no preset decision made on our behalf — firmware NC handles heating from room temp)
+                // Carousel park/standby target temperature — 3-level hierarchy (no hardcoded constants):
+                //   1. filament_pre_cooling_temperature_nc > 0  →  NC-specific park temp (carousel slot idle)
+                //   2. idle_temperature > 0                     →  generic standby configured in preset
+                //   3. room_temperature (25°C), preheat=false   →  nothing configured; firmware handles heating
+                //
+                // WHY different from Galantcev PR f58acc2a56:
+                //   That PR added a hardcoded fallback of 180°C inside inject_cooling_heating_command()
+                //   as a floor on mid_temp and cooling_temp. The 180°C came from "the same safe fallback
+                //   the intra-extruder nozzle-change branch uses", but that branch itself has the same
+                //   180°C hardcode — so the constant propagated without a preset basis.
+                //
+                //   Our approach: the TARGET temperature for cooling+preheating is set HERE at the
+                //   process_pre_cooling_and_heating level, from the actual preset values, before
+                //   inject_cooling_heating_command() is called. inject_cooling_heating_command() remains
+                //   generic (no carousel-specific floor). If no temperature is configured in the preset
+                //   we do NOT invent a value — we cool to room_temp and suppress the preheat, letting
+                //   firmware NC handle the heating autonomously.
+                //
                 // Reference to BBS: BambuStudio WipeTower.cpp — park temp hierarchy for carousel nozzles.
                 int blk_park_temp_nc = 0;
                 if (iter->last_filament_id >= 0 && iter->last_filament_id < (int)m_filament_pre_cooling_temps_nc.size())
@@ -654,13 +672,24 @@ void PreCooling::inject_cooling_heating_command(
     }
 
     // perform cooling first and then perform heating
-    // H2C carousel: for blocks that WILL be reused (pre_heating=true, target_temp=park_temp_nc≈180°C)
-    // the formula is left unmodified — room_temperature floor is used as normal.
-    // Short window: formula naturally gives mid_temp > park_temp_nc (no floor needed).
-    // Long window: formula gives mid_temp ≈ room_temp → cooldown to ~25°C, then preheat to park_temp_nc.
-    // This is correct: the nozzle cools fully and is reheated to park_temp_nc well before TC;
-    // firmware NC then handles the short park_temp_nc → print_temp step.
-    // Reference to BBS: BambuStudio PR#1 / commit 284ae6e2a5 — park_temp floor removed; target_temp IS park_temp_nc.
+    //
+    // WHY no park_temp_nc floor on mid_temp here (vs Galantcev PR f58acc2a56):
+    //   f58acc2a56 clamped mid_temp and cooling_temp at park_temp_nc (≈180°C) inside THIS function
+    //   to prevent the carousel nozzle from cooling all the way to room temperature when the free
+    //   window is long. That floor was correct in intent but implemented in the wrong place:
+    //   injecting a per-extruder floor into a generic function makes the logic implicit and
+    //   couples carousel semantics into a BBS-ported utility.
+    //
+    //   Our design moves the decision upstream: process_pre_cooling_and_heating() passes
+    //   target_temp = park_temp_nc (not print_temp) for carousel blocks. With target_temp=180°C:
+    //   - Short free window → formula gives mid_temp > 180 → cooling halts above park temp anyway.
+    //   - Long free window  → formula gives mid_temp ≈ room_temp; nozzle cools to ~25°C, then
+    //     preheats back to park_temp_nc. This is INTENTIONAL: the nozzle has time to fully cool
+    //     and be reheated to park_temp_nc well before the toolchange; firmware NC then handles
+    //     the short park_temp_nc → print_temp step from a known warm state.
+    //   The final-idle block uses pre_heating=false → falls into the pre_cooling-only path above
+    //   and legitimately cools to room temperature. No floor needed anywhere in this function.
+    // Reference to BBS: BambuStudio commit 284ae6e2a5 — target_temp IS park_temp_nc.
     float mid_temp = std::max(room_temperature, (curr_temp * ext_heating_rate + target_temp * ext_cooling_rate - complete_free_time_gap * ext_cooling_rate * ext_heating_rate) / (ext_cooling_rate + ext_heating_rate));
     float heating_temp = target_temp - mid_temp;
     float heating_start_time = get_cum_time(move_iter_upper) - heating_temp / ext_heating_rate;
