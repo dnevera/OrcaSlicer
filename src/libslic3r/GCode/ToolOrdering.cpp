@@ -1306,6 +1306,10 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
         } else if (map_mode == FilamentMapMode::fmmNozzleManual) {
             is_vortek_handled = ::Vortek::GroupReorder::handle_nozzle_manual_reorder(
                 m_print, print_config, used_filaments, filament_maps, number_of_extruders);
+        } else if (map_mode == FilamentMapMode::fmmManual) {
+            // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp (PR#1 / commit 284ae6e2a5)
+            // H2C hook: delegate to Vortek isolated layer.
+            ::Vortek::GroupReorder::handle_manual_mode_reorder(m_print, filament_maps);
         }
 
         if (!is_vortek_handled) {

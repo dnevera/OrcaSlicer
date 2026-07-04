@@ -64,4 +64,39 @@ bool GroupReorder::handle_nozzle_manual_reorder(
 
     return true;
 }
+
+// Reference to BBS: BambuStudio PR#1 / commit 284ae6e2a5 — ToolOrdering.cpp sort_and_build_data fmmManual branch
+void GroupReorder::handle_manual_mode_reorder(
+    Slic3r::Print* print,
+    const std::vector<int>& filament_maps)
+{
+    // Guard: only H2C printers with carousel need M632 priming initialization.
+    if (!print || !is_h2c_printer(*print)) {
+        return;
+    }
+
+    // filament_maps is 1-based: 1 = Left (fixed nozzle), 2 = Right (carousel).
+    // Only run when at least one filament is assigned to the carousel (extruder 2).
+    // An all-Left print has no nozzle changes and needs no priming; calling
+    // update_filament_maps_to_config() there would drive the single-nozzle print down
+    // the multi-nozzle fake-wipe-tower path (empty z_and_depth_pairs → crash).
+    const bool uses_carousel = std::any_of(filament_maps.begin(), filament_maps.end(),
+                                            [](int m) { return m == 2; });
+    if (!uses_carousel) {
+        VORTEK_LOG(warn, "handle_manual_mode_reorder: all filaments on Left nozzle, skipping carousel init");
+        return;
+    }
+
+    VORTEK_LOG(warn, "handle_manual_mode_reorder: carousel used in Manual mode — initializing nozzle_group_result via update_filament_maps_to_config");
+
+    // Call update_filament_maps_to_config with the EXISTING user map (no recomputation).
+    // Side-effect: builds and stores nozzle_group_result so the GCodeProcessor
+    // pre-cooling/pre-heating post-processor (gated on get_nozzle_group_result()) runs.
+    // The hook is idempotent: matching maps → no rewrite → no re-slice loop.
+    print->update_filament_maps_to_config(
+        filament_maps,
+        print->config().filament_volume_map.values,
+        print->config().filament_nozzle_map.values);
+}
+
 } // namespace Vortek

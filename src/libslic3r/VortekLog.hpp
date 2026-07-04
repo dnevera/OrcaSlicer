@@ -7,7 +7,7 @@
  * @brief Global compile-time switch for Vortek logging.
  * Set to 1 to enable logging, or 0 to completely compile out all Vortek logs.
  */
-#define VORTEK_LOGGING_ENABLED 0
+#define VORTEK_LOGGING_ENABLED 1
 
 #if VORTEK_LOGGING_ENABLED
     /**

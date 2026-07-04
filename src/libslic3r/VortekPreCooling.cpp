@@ -120,15 +120,75 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
 
     for (auto& elem : per_extruder_free_blocks) {
         int extruder_id = elem.first;
+        bool ext_is_carousel = (extruder_id >= 0 && extruder_id < (int)m_extruder_max_nozzle_count.size() && m_extruder_max_nozzle_count[extruder_id] > 1);
         auto& extruder_free_blocks = elem.second;
         for (auto iter = extruder_free_blocks.begin(); iter != extruder_free_blocks.end(); ++iter) {
             bool is_end = std::next(iter) == extruder_free_blocks.end();
             bool apply_pre_cooling = true;
             bool apply_pre_heating = is_end ? false : true;
 
-            // Fix 2 (revised): For sentinel start blocks (last_fil=-1), the extruder is cold.
-            // We keep cooling=true for correct mid_temp timing calculation,
-            // but mark the block to suppress actual cooling M104 emission.
+            if (ext_is_carousel) {
+                if (iter->last_filament_id < 0) {
+                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: SKIP carousel ext " << extruder_id
+                        << " sentinel block (last_fil=-1) — nothing to cooldown");
+                    continue;
+                }
+                // Hierarchy of carousel standby/park target temperature (no hardcoded constants):
+                //   1. filament_pre_cooling_temperature_nc (NC-specific park temp) — if configured in preset
+                //   2. idle_temperature (generic standby temp) — if configured in preset
+                //   3. room_temperature — if nothing is configured; in this case skip preheat
+                //      (no preset decision made on our behalf — firmware NC handles heating from room temp)
+                // Reference to BBS: BambuStudio WipeTower.cpp — park temp hierarchy for carousel nozzles.
+                int blk_park_temp_nc = 0;
+                if (iter->last_filament_id >= 0 && iter->last_filament_id < (int)m_filament_pre_cooling_temps_nc.size())
+                    blk_park_temp_nc = m_filament_pre_cooling_temps_nc[iter->last_filament_id];
+
+                int blk_idle_temp = 0;
+                if (blk_park_temp_nc <= 0) {
+                    if (iter->last_filament_id >= 0 && iter->last_filament_id < (int)m_filament_idle_temps.size())
+                        blk_idle_temp = m_filament_idle_temps[iter->last_filament_id];
+                }
+
+                constexpr float room_temp_floor = 25.f;
+                float blk_target_temp;
+                bool blk_do_preheat;
+                if (blk_park_temp_nc > 0) {
+                    blk_target_temp = (float)blk_park_temp_nc;
+                    blk_do_preheat  = apply_pre_heating; // !is_end
+                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: carousel ext " << extruder_id
+                        << " last_fil=" << iter->last_filament_id
+                        << " — using park_temp_nc=" << blk_park_temp_nc);
+                } else if (blk_idle_temp > 0) {
+                    blk_target_temp = (float)blk_idle_temp;
+                    blk_do_preheat  = apply_pre_heating; // !is_end
+                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: carousel ext " << extruder_id
+                        << " last_fil=" << iter->last_filament_id
+                        << " — no park_temp_nc, using idle_temp=" << blk_idle_temp);
+                } else {
+                    // Nothing configured in preset: cool to room temp, no preheat.
+                    // Firmware NC will heat from room temp to print temp on its own.
+                    blk_target_temp = room_temp_floor;
+                    blk_do_preheat  = false;
+                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: carousel ext " << extruder_id
+                        << " last_fil=" << iter->last_filament_id
+                        << " — no park/idle temp in preset, cooldown to room_temp only (no preheat)");
+                }
+
+                {
+                    float curr_temp = get_nozzle_temp(iter->last_filament_id, false, true, false);
+                    VORTEK_LOG(warning, "process_block: ext=" << extruder_id
+                        << " last_fil=" << iter->last_filament_id << " next_fil=" << iter->next_filament_id
+                        << " last_nozzle=" << iter->last_nozzle_id << " next_nozzle=" << iter->next_nozzle_id
+                        << " lower_gid=" << iter->free_lower_gcode_id << " upper_gid=" << iter->free_upper_gcode_id
+                        << " curr_temp=" << curr_temp << " target_temp=" << blk_target_temp
+                        << " cooling=" << apply_pre_cooling << " heating=" << blk_do_preheat
+                        << " ignore_tower=" << iter->ignore_cooling_before_tower);
+                    inject_cooling_heating_command(inserted_operation_lines, *iter, curr_temp, blk_target_temp,
+                                                  apply_pre_cooling, blk_do_preheat, false);
+                }
+                continue;
+            }
+
             bool suppress_cooling_emission = (iter->last_filament_id == -1);
 
             float curr_temp = get_nozzle_temp(iter->last_filament_id, false, true, false);
@@ -594,6 +654,13 @@ void PreCooling::inject_cooling_heating_command(
     }
 
     // perform cooling first and then perform heating
+    // H2C carousel: for blocks that WILL be reused (pre_heating=true, target_temp=park_temp_nc≈180°C)
+    // the formula is left unmodified — room_temperature floor is used as normal.
+    // Short window: formula naturally gives mid_temp > park_temp_nc (no floor needed).
+    // Long window: formula gives mid_temp ≈ room_temp → cooldown to ~25°C, then preheat to park_temp_nc.
+    // This is correct: the nozzle cools fully and is reheated to park_temp_nc well before TC;
+    // firmware NC then handles the short park_temp_nc → print_temp step.
+    // Reference to BBS: BambuStudio PR#1 / commit 284ae6e2a5 — park_temp floor removed; target_temp IS park_temp_nc.
     float mid_temp = std::max(room_temperature, (curr_temp * ext_heating_rate + target_temp * ext_cooling_rate - complete_free_time_gap * ext_cooling_rate * ext_heating_rate) / (ext_cooling_rate + ext_heating_rate));
     float heating_temp = target_temp - mid_temp;
     float heating_start_time = get_cum_time(move_iter_upper) - heating_temp / ext_heating_rate;
@@ -902,25 +969,27 @@ PreCooling::InsertedLinesMap PreCooling::run_pre_scan(Slic3r::GCodeProcessor& pr
     
     int standby_temp_delta = print_config.standby_temperature_delta.value;
 
-    // Reference to BBS: GCodeProcessor.cpp:1931 — m_filament_pre_cooling_temp = config.filament_pre_cooling_temperature.values
-    // BBS passes filament_pre_cooling_temperature (NOT _nc!) to process_pre_cooling_and_heating.
-    // _nc (=180°C) is only used in WipeTower for gcode macros.
-    // With pre_cooling_temp = [0,0,...], is_pre_cooling_valid() returns false → partial free cooling disabled.
-    std::vector<int> pre_cooling_temp_nc;
-    if (!print_config.filament_pre_cooling_temperature.values.empty()) {
-        pre_cooling_temp_nc.resize(print_config.filament_pre_cooling_temperature.values.size());
-        for (size_t i = 0; i < pre_cooling_temp_nc.size(); ++i) {
+    // Per-filament pre-cooling target temperature:
+    //   - filament_pre_cooling_temperature_nc > 0  →  NC-specific carousel park temp (H2C right extruder)
+    //   - otherwise → filament_pre_cooling_temperature (BBS standard timing, left extruder / non-NC)
+    // Reference to BBS: GCodeProcessor.cpp:1931 — m_filament_pre_cooling_temp = config.filament_pre_cooling_temperature
+    size_t num_fil = print_config.filament_type.values.size();
+    std::vector<int> pre_cooling_temp_nc(num_fil, 0);
+    for (size_t i = 0; i < num_fil; ++i) {
+        int val_nc = 0;
+        if (!print_config.filament_pre_cooling_temperature_nc.values.empty())
+            val_nc = print_config.filament_pre_cooling_temperature_nc.get_at(i);
+        if (val_nc > 0) {
+            pre_cooling_temp_nc[i] = val_nc;
+        } else if (!print_config.filament_pre_cooling_temperature.values.empty()) {
             pre_cooling_temp_nc[i] = print_config.filament_pre_cooling_temperature.get_at(i);
         }
-    } else {
-        // Fallback: if filament_pre_cooling_temperature is not available, use zeros (BBS default)
-        pre_cooling_temp_nc.resize(print_config.filament_type.values.size(), 0);
     }
     {
         std::string temps_str;
         for (size_t i = 0; i < pre_cooling_temp_nc.size(); ++i)
             temps_str += (i ? "," : "") + std::to_string(pre_cooling_temp_nc[i]);
-        VORTEK_LOG(warning, "run_pre_scan: pre_cooling_temp (non-nc, for timing)=[" << temps_str << "]");
+        VORTEK_LOG(warning, "run_pre_scan: pre_cooling_temp_nc (nc→fallback)=[" << temps_str << "]");
     }
 
     std::vector<int> filament_idle_temps(print_config.idle_temperature.values.size());

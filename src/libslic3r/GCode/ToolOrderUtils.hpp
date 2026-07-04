@@ -15,6 +15,9 @@ using FlushMatrix = std::vector<std::vector<float>>;
 namespace MaxFlowGraph {
     const int INF = std::numeric_limits<int>::max();
     const int INVALID_ID = -1;
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrderUtils.hpp (commit 2f014ce1a)
+    // Upper bound for MCMF edge cost to prevent int overflow in SPFA causing infinite loops.
+    constexpr int MCMF_MAX_EDGE_COST = 10000000;
 }
 
 class MaxFlowSolver

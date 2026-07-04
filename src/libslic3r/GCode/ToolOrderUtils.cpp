@@ -107,15 +107,13 @@ namespace Slic3r
     {
         if (l_nodes[idx_in_left] == -1) {
             return 0;
-            //TODO: test more here
-            int sum = 0;
-            for (int i = 0; i < matrix.size(); ++i)
-                sum += matrix[i][idx_in_right];
-            sum /= matrix.size();
-            return -sum;
         }
 
-        return matrix[l_nodes[idx_in_left]][r_nodes[idx_in_right]];
+        // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrderUtils.cpp (commit 2f014ce1a)
+        // Clamp the edge cost to avoid int overflow in SPFA,
+        // which could otherwise produce an infinite loop.
+        float val = matrix[l_nodes[idx_in_left]][r_nodes[idx_in_right]];
+        return std::min(static_cast<int>(val), MaxFlowGraph::MCMF_MAX_EDGE_COST);
     }
 
 
