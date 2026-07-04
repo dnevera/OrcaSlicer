@@ -121,7 +121,7 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
     for (auto& elem : per_extruder_free_blocks) {
         int extruder_id = elem.first;
         // Carousel detection: an extruder with more than one nozzle slot is a carousel.
-        // Galantcev PR f58acc2a56 operated on inject_cooling_heating_command() generically
+        // f58acc2a56 operated on inject_cooling_heating_command() generically
         // (no per-extruder type check). We split carousel handling into a dedicated path
         // here so that the logic is explicit and cannot accidentally affect fixed nozzles.
         // ExtruderType::Carousel does not exist in this codebase — use m_extruder_max_nozzle_count > 1.
@@ -143,7 +143,7 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
                 //   2. idle_temperature > 0                     →  generic standby configured in preset
                 //   3. room_temperature (25°C), preheat=false   →  nothing configured; firmware handles heating
                 //
-                // WHY different from Galantcev PR f58acc2a56:
+                // WHY different from f58acc2a56:
                 //   That PR added a hardcoded fallback of 180°C inside inject_cooling_heating_command()
                 //   as a floor on mid_temp and cooling_temp. The 180°C came from "the same safe fallback
                 //   the intra-extruder nozzle-change branch uses", but that branch itself has the same
@@ -673,7 +673,7 @@ void PreCooling::inject_cooling_heating_command(
 
     // perform cooling first and then perform heating
     //
-    // WHY no park_temp_nc floor on mid_temp here (vs Galantcev PR f58acc2a56):
+    // WHY no park_temp_nc floor on mid_temp here (vs f58acc2a56):
     //   f58acc2a56 clamped mid_temp and cooling_temp at park_temp_nc (≈180°C) inside THIS function
     //   to prevent the carousel nozzle from cooling all the way to room temperature when the free
     //   window is long. That floor was correct in intent but implemented in the wrong place:
