@@ -29,8 +29,32 @@ public:
      * @brief Represents a time window when a physical extruder/nozzle carriage is idle.
      */
     struct ExtruderFreeBlock {
-        unsigned int free_lower_gcode_id;   ///< Lower bound of G-code line index
-        unsigned int free_upper_gcode_id;   ///< Upper bound of G-code line index
+        unsigned int free_lower_gcode_id;   ///< Lower bound of G-code line index (end of last UsageBlock = start of TC)
+        unsigned int free_upper_gcode_id;   ///< Upper bound of G-code line index (start of next UsageBlock = start of next TC)
+        // preheat_upper_gcode_id:
+        //   Upper boundary used ONLY for preheat move search. Points to the last print-move
+        //   BEFORE the upcoming change_filament_gcode block begins — i.e. the last G-code line
+        //   that belongs to the actual print layer, not to the TC sequence.
+        //
+        //   WHY a separate field from free_upper_gcode_id:
+        //   free_upper_gcode_id = niter->start_id = first line of next ExtruderUsageBlock,
+        //   which is the BEGINNING of change_filament_gcode. The GCodeProcessor includes moves
+        //   from change_filament_gcode (G1/G0 travel/purge) in m_moves. When preheat
+        //   heating_start_time is computed as (upper_time - heating_temp/rate), the result
+        //   falls INSIDE the TC block for short heating durations (< TC duration ~120s).
+        //   Using free_upper_gcode_id as the search anchor therefore injects M104 preheat
+        //   inside change_filament_gcode, which is too late — firmware has already started
+        //   the physical carousel exchange.
+        //
+        //   For carousel blocks (build_by_extruder_blocks): set to iter->end_id (= free_lower_gcode_id
+        //   of THIS block), which is the last gcode_id of the previous ExtruderUsageBlock
+        //   (= last print move before TC). This ensures upper_bound search stays in print-moves.
+        //   For filament blocks (build_by_filament_blocks): same as free_upper_gcode_id (no TC gap).
+        //
+        // Reference to BBS: BambuStudio/src/libslic3r/GCode/GCodeProcessor.cpp —
+        //   BBS inserts M632/M104 preheat into the print layer, NOT inside change_filament_gcode,
+        //   by scanning backwards from the TC across layer boundaries.
+        unsigned int preheat_upper_gcode_id; ///< Max gcode_id to search for preheat injection (print-moves only, before TC)
         unsigned int partial_free_lower_id;
         unsigned int partial_free_upper_id;
         unsigned int post_tc_gcode_id = 0;  ///< G-code line AFTER NOZZLE_CHANGE_END (for post-TC reheat)
@@ -68,13 +92,19 @@ public:
         int end_nozzle_id = -1;
         unsigned int post_extrusion_start_id = -1;
         unsigned int post_extrusion_end_id = -1;
+        /// NOZZLE_CHANGE_START of the TC that begins THIS block (i.e. opens the free window
+        /// for the PREVIOUS block). Used as preheat_upper anchor: it is BEFORE the H2C
+        /// physical swap sequence and keeps heating_start_time in the print stream.
+        unsigned int nozzle_change_start_id = -1;
         bool ignore_cooling_before_tower = false;
 
-        void initialize_step_1(int extruder_id_, int start_id_, int start_filament_, int start_nozzle_id_) {
+        void initialize_step_1(int extruder_id_, int start_id_, int start_filament_, int start_nozzle_id_,
+                                 unsigned int nc_start_id_ = (unsigned int)-1) {
             extruder_id = extruder_id_;
             start_id = start_id_;
             start_filament = start_filament_;
             start_nozzle_id = start_nozzle_id_;
+            nozzle_change_start_id = nc_start_id_;
         }
         void initialize_step_2(int post_extrusion_start_id_) {
             post_extrusion_start_id = post_extrusion_start_id_;

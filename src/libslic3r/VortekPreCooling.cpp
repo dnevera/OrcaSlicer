@@ -198,6 +198,7 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
                         << " last_fil=" << iter->last_filament_id << " next_fil=" << iter->next_filament_id
                         << " last_nozzle=" << iter->last_nozzle_id << " next_nozzle=" << iter->next_nozzle_id
                         << " lower_gid=" << iter->free_lower_gcode_id << " upper_gid=" << iter->free_upper_gcode_id
+                        << " preheat_upper_gid=" << iter->preheat_upper_gcode_id
                         << " curr_temp=" << curr_temp << " target_temp=" << blk_target_temp
                         << " cooling=" << apply_pre_cooling << " heating=" << blk_do_preheat
                         << " ignore_tower=" << iter->ignore_cooling_before_tower);
@@ -220,6 +221,7 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
                 << " last_fil=" << iter->last_filament_id << " next_fil=" << iter->next_filament_id
                 << " last_nozzle=" << iter->last_nozzle_id << " next_nozzle=" << iter->next_nozzle_id
                 << " lower_gid=" << iter->free_lower_gcode_id << " upper_gid=" << iter->free_upper_gcode_id
+                << " preheat_upper_gid=" << iter->preheat_upper_gcode_id
                 << " curr_temp=" << curr_temp << " target_temp=" << target_temp
                 << " cooling=" << apply_pre_cooling << " heating=" << apply_pre_heating
                 << " ignore_tower=" << iter->ignore_cooling_before_tower);
@@ -283,6 +285,9 @@ void PreCooling::build_by_filament_blocks(const std::vector<FilamentUsageBlock>&
             block.last_filament_id     = iter->filament_id;
             block.last_nozzle_id       = iter->nozzle_id;
             block.free_upper_gcode_id  = niter->lower_gcode_id;
+            // For filament-only blocks there is no change_filament_gcode gap between free_lower
+            // and free_upper, so preheat search can use free_upper directly.
+            block.preheat_upper_gcode_id = niter->lower_gcode_id;
             block.next_filament_id     = niter->filament_id;
             block.next_nozzle_id       = niter->nozzle_id;
             if (block.last_nozzle_id == -1)
@@ -361,6 +366,30 @@ void PreCooling::build_by_extruder_blocks(const std::vector<ExtruderUsageBlock>&
             block.last_filament_id      = iter->end_filament;
             block.last_nozzle_id        = iter->end_nozzle_id;
             block.free_upper_gcode_id   = niter->start_id;
+            // preheat_upper_gcode_id = niter->start_id (= free_upper_gcode_id = NOZZLE_CHANGE_END
+            // of the next TC). This gives upper_time at the end of the free window (including TC
+            // overhead), so heating_start_time = upper_time - heating_temp/rate correctly lands
+            // deep in the print stream (in a wipe tower pass of an earlier layer), matching BBS.
+            //
+            // NOTE: m_moves contains G1/G0 moves inside the TC block too, so preheat_move_iter_upper
+            // will point to a move inside TC wipe — but that is only used as an anchor for the time
+            // calculation. The actual injection point (heating_move_iter->gcode_id) is found by
+            // searching backwards in [move_iter_lower .. preheat_move_iter_upper] and will land
+            // before the TC in the regular print stream.
+            //
+            // Reference to BBS: BambuStudio/src/libslic3r/GCode/GCodeProcessor.cpp —
+            //   preheat is placed before TC using time-based search from free_upper anchor.
+            // H2C TC overhead (physical swap) can be 60-120s. Using niter->start_id
+            // (= NOZZLE_CHANGE_END) as upper gives upper_time deep inside TC, so
+            // heating_start_time = upper_time - heat_ramp still lands inside TC.
+            // Fix: use niter->nozzle_change_start_id = NOZZLE_CHANGE_START of the TC
+            // that BEGINS niter (= the boundary that opens this free window). This is
+            // BEFORE the H2C physical swap, so upper_time excludes the 60-120s swap.
+            // heating_start_time = upper_time - heat_ramp then lands in print stream.
+            // Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp — preheat before TC.
+            block.preheat_upper_gcode_id = (niter->nozzle_change_start_id != (unsigned int)-1)
+                                            ? niter->nozzle_change_start_id  // = NOZZLE_CHANGE_START of TC opening this free window
+                                            : niter->start_id;               // fallback: NOZZLE_CHANGE_END
             block.next_filament_id      = niter->start_filament;
             block.next_nozzle_id        = niter->start_nozzle_id;
             if (block.last_nozzle_id == -1)
@@ -555,9 +584,24 @@ void PreCooling::inject_cooling_heating_command(
     auto move_iter_lower = std::lower_bound(m_moves.cbegin(), m_moves.cend(), block.free_lower_gcode_id, gcode_move_comp);
     auto move_iter_upper = std::lower_bound(m_moves.cbegin(), m_moves.cend(), block.free_upper_gcode_id, gcode_move_comp);
 
+    // preheat_move_iter_upper is clamped to preheat_upper_gcode_id (last print-move before TC).
+    // For carousel blocks this equals free_lower_gcode_id; for filament blocks it equals free_upper.
+    // Using this for heating_start_time prevents the preheat M104 from landing inside
+    // change_filament_gcode (which is inside [free_lower..free_upper] for carousel).
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode/GCodeProcessor.cpp — preheat is always
+    //   placed in the print stream BEFORE TC, not inside change_filament_gcode.
+    auto preheat_move_iter_upper = std::lower_bound(m_moves.cbegin(), m_moves.cend(), block.preheat_upper_gcode_id, gcode_move_comp);
+
     if (move_iter_lower == m_moves.cend() || move_iter_upper == m_moves.cbegin())
         return;
     --move_iter_upper;
+
+    // Clamp preheat upper: if preheat_upper points beyond the available moves or equals lower,
+    // fall back to free_lower (inject at TC boundary, still before change_filament_gcode).
+    if (preheat_move_iter_upper == m_moves.cbegin())
+        preheat_move_iter_upper = move_iter_lower;
+    else if (preheat_move_iter_upper != m_moves.cend())
+        --preheat_move_iter_upper;
 
     float complete_free_time_gap = 0;
     if (move_iter_lower == m_moves.cbegin())
@@ -658,14 +702,16 @@ void PreCooling::inject_cooling_heating_command(
     if (!pre_cooling && pre_heating) {
         if (target_temp <= curr_temp)
             return;
-        float heating_start_time = get_cum_time(move_iter_upper) - (target_temp - curr_temp) / ext_heating_rate;
-        auto heating_move_iter = std::upper_bound(move_iter_lower, move_iter_upper + 1, heating_start_time, [this](float time, const Slic3r::GCodeProcessorResult::MoveVertex& a) { return time < get_cum_time(m_moves.cbegin() + (&a - &m_moves[0])); });
+        // Use preheat_move_iter_upper so that heating_start_time is computed relative to
+        // the last print-move before TC (not inside change_filament_gcode).
+        float heating_start_time = get_cum_time(preheat_move_iter_upper) - (target_temp - curr_temp) / ext_heating_rate;
+        auto heating_move_iter = std::upper_bound(move_iter_lower, preheat_move_iter_upper + 1, heating_start_time, [this](float time, const Slic3r::GCodeProcessorResult::MoveVertex& a) { return time < get_cum_time(m_moves.cbegin() + (&a - &m_moves[0])); });
         if (heating_move_iter == move_iter_lower) {
             add_M104_lines(block.free_lower_gcode_id, next_extruder_id, target_temp, block.next_filament_id, true, block.next_filament_id, block.next_nozzle_id, 2, "Multi extruder pre heating");
         }
         else {
             --heating_move_iter;
-            heating_move_iter = adjust_iter(heating_move_iter, move_iter_lower, move_iter_upper, false);
+            heating_move_iter = adjust_iter(heating_move_iter, move_iter_lower, preheat_move_iter_upper, false);
             add_M104_lines(heating_move_iter->gcode_id, next_extruder_id, target_temp, block.next_filament_id, true, block.next_filament_id, block.next_nozzle_id, 2, "Multi extruder pre heating");
         }
         return;
@@ -690,13 +736,18 @@ void PreCooling::inject_cooling_heating_command(
     //   The final-idle block uses pre_heating=false → falls into the pre_cooling-only path above
     //   and legitimately cools to room temperature. No floor needed anywhere in this function.
     // Reference to BBS: BambuStudio commit 284ae6e2a5 — target_temp IS park_temp_nc.
+    //
+    // NOTE: complete_free_time_gap is intentionally computed from move_iter_upper (free_upper)
+    // to include the TC block duration in the idle time accounting. preheat_move_iter_upper
+    // is used only for positioning the preheat M104 injection point.
     float mid_temp = std::max(room_temperature, (curr_temp * ext_heating_rate + target_temp * ext_cooling_rate - complete_free_time_gap * ext_cooling_rate * ext_heating_rate) / (ext_cooling_rate + ext_heating_rate));
     float heating_temp = target_temp - mid_temp;
-    float heating_start_time = get_cum_time(move_iter_upper) - heating_temp / ext_heating_rate;
-    auto heating_move_iter = std::upper_bound(move_iter_lower, move_iter_upper + 1, heating_start_time, [this](float time, const Slic3r::GCodeProcessorResult::MoveVertex& a) { return time < get_cum_time(m_moves.cbegin() + (&a - &m_moves[0])); });
+    float heating_start_time = get_cum_time(preheat_move_iter_upper) - heating_temp / ext_heating_rate;
+    auto heating_move_iter = std::upper_bound(move_iter_lower, preheat_move_iter_upper + 1, heating_start_time, [this](float time, const Slic3r::GCodeProcessorResult::MoveVertex& a) { return time < get_cum_time(m_moves.cbegin() + (&a - &m_moves[0])); });
     
     VORTEK_LOG(warning, "[DBG] mid_temp=" << mid_temp << " heating_temp=" << heating_temp
-        << " upper_time=" << get_cum_time(move_iter_upper)
+        << " preheat_upper_time=" << get_cum_time(preheat_move_iter_upper)
+        << " free_upper_time=" << get_cum_time(move_iter_upper)
         << " heating_start_time=" << heating_start_time
         << " lower_time=" << get_cum_time(move_iter_lower)
         << " heating_iter_at_lower=" << (heating_move_iter == move_iter_lower));
@@ -704,7 +755,7 @@ void PreCooling::inject_cooling_heating_command(
     if (heating_move_iter == move_iter_lower)
         return;
     --heating_move_iter;
-    heating_move_iter = adjust_iter(heating_move_iter, move_iter_lower, move_iter_upper, false);
+    heating_move_iter = adjust_iter(heating_move_iter, move_iter_lower, preheat_move_iter_upper, false);
 
     float real_cooling_time = get_cum_time(heating_move_iter) - get_cum_time(move_iter_lower);
     int real_delta_temp = std::min((int)(real_cooling_time * ext_cooling_rate), (int)curr_temp);
@@ -836,6 +887,9 @@ PreCooling::InsertedLinesMap PreCooling::run_pre_scan(Slic3r::GCodeProcessor& pr
     };
 
     Slic3r::GCodeReader parser;
+    // Tracks NOZZLE_CHANGE_START line across NC_START→NC_END events, so the new
+    // ExtruderUsageBlock can store it as nozzle_change_start_id (preheat_upper anchor).
+    unsigned int last_nc_start_id = (unsigned int)-1;
     parser.parse_file(filename, [&](Slic3r::GCodeReader& reader, const Slic3r::GCodeReader::GCodeLine& line) {
         ++line_id;
         const std::string& raw_line = line.raw();
@@ -925,6 +979,10 @@ PreCooling::InsertedLinesMap PreCooling::run_pre_scan(Slic3r::GCodeProcessor& pr
             if (!extruder_blocks.empty()) {
                 extruder_blocks.back().initialize_step_2(line_id);
             }
+            // Remember this NC_START line_id so the NEW block (created at NC_END)
+            // can store it as nozzle_change_start_id — the boundary BEFORE the
+            // H2C physical swap. Used as preheat_upper anchor.
+            last_nc_start_id = line_id;
         }
         else if (raw_line.find(";_NOZZLE_CHANGE_END") != std::string::npos) {
             VORTEK_LOG(warning, "run_pre_scan: NOZZLE_CHANGE_END found at line " << line_id << " raw=" << raw_line.substr(0, std::min(raw_line.size(), (size_t)80)));
@@ -935,8 +993,11 @@ PreCooling::InsertedLinesMap PreCooling::run_pre_scan(Slic3r::GCodeProcessor& pr
                 extruder_blocks.back().initialize_step_3(line_id, prev_filament, line_id, prev_nozzle_id);
             }
             ExtruderUsageBlock temp_construct_block;
-            temp_construct_block.initialize_step_1(extruder_id, line_id, next_filament, next_nozzle_id);
+            // Pass last_nc_start_id so new block knows when ITS TC physically started.
+            // Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp — preheat placed before TC.
+            temp_construct_block.initialize_step_1(extruder_id, line_id, next_filament, next_nozzle_id, last_nc_start_id);
             extruder_blocks.emplace_back(temp_construct_block);
+            last_nc_start_id = (unsigned int)-1; // reset
         }
         else if (Slic3r::GCodeReader::GCodeLine::cmd_starts_with(raw_line, ";_CP_TOOLCHANGE_WIPE")) {
             std::regex re(R"(CT(\d)(?:\s+FL(\d))?)");
