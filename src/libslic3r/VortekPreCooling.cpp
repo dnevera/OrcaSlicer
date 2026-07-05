@@ -1,4 +1,15 @@
 #include "VortekPreCooling.hpp"
+
+// ─── Build switch: pre-cooling mid_temp floor strategy ────────────────────────
+// 0 (default) — our design: process_pre_cooling_and_heating() passes
+//               target_temp = park_temp_nc for carousel blocks, so the floor
+//               is applied upstream and this function stays generic.
+// 1           — Galantsev (galantsev/add_h2c_v2 commit f58acc2a56): inline
+//               floor at park_temp_nc (≈180°C) inside inject_cooling_heating_command.
+//               Simpler but couples carousel semantics into a BBS-ported utility.
+//               Use to A/B test behavior on hardware.
+#define VORTEK_PRECOOL_FLOOR_INLINE 0
+// ─────────────────────────────────────────────────────────────────────────────
 #include "VortekLog.hpp"
 #include "GCodeReader.hpp"
 #include "Print.hpp"
@@ -718,29 +729,36 @@ void PreCooling::inject_cooling_heating_command(
     }
 
     // perform cooling first and then perform heating
-    //
-    // WHY no park_temp_nc floor on mid_temp here (vs f58acc2a56):
-    //   f58acc2a56 clamped mid_temp and cooling_temp at park_temp_nc (≈180°C) inside THIS function
-    //   to prevent the carousel nozzle from cooling all the way to room temperature when the free
-    //   window is long. That floor was correct in intent but implemented in the wrong place:
-    //   injecting a per-extruder floor into a generic function makes the logic implicit and
-    //   couples carousel semantics into a BBS-ported utility.
-    //
-    //   Our design moves the decision upstream: process_pre_cooling_and_heating() passes
-    //   target_temp = park_temp_nc (not print_temp) for carousel blocks. With target_temp=180°C:
-    //   - Short free window → formula gives mid_temp > 180 → cooling halts above park temp anyway.
-    //   - Long free window  → formula gives mid_temp ≈ room_temp; nozzle cools to ~25°C, then
-    //     preheats back to park_temp_nc. This is INTENTIONAL: the nozzle has time to fully cool
-    //     and be reheated to park_temp_nc well before the toolchange; firmware NC then handles
-    //     the short park_temp_nc → print_temp step from a known warm state.
-    //   The final-idle block uses pre_heating=false → falls into the pre_cooling-only path above
-    //   and legitimately cools to room temperature. No floor needed anywhere in this function.
-    // Reference to BBS: BambuStudio commit 284ae6e2a5 — target_temp IS park_temp_nc.
-    //
+    // Reference to BBS: BambuStudio commit 284ae6e2a5.
     // NOTE: complete_free_time_gap is intentionally computed from move_iter_upper (free_upper)
     // to include the TC block duration in the idle time accounting. preheat_move_iter_upper
     // is used only for positioning the preheat M104 injection point.
+
+    // reuse_cool_floor: minimum temperature for cooling_temp at line below (used in both strategies).
+#if VORTEK_PRECOOL_FLOOR_INLINE
+    // Galantsev approach (galantsev/add_h2c_v2 f58acc2a56):
+    // Floor mid_temp and cooling_temp at carousel park temp inline. Prevents nozzle cooling to room
+    // temperature when free window is long, avoiding a long stall-inducing reheat.
+    // m_filament_pre_cooling_temps_nc is usually 0 here → falls back to 180°C.
+    int park_temp_nc = 0;
+    if (block.last_filament_id >= 0 && block.last_filament_id < (int)m_filament_pre_cooling_temps_nc.size())
+        park_temp_nc = m_filament_pre_cooling_temps_nc[block.last_filament_id];
+    if (park_temp_nc <= 0)
+        park_temp_nc = 180;
+    const float reuse_cool_floor = std::max(room_temperature, (float)park_temp_nc);
+    float mid_temp = std::max(reuse_cool_floor, (curr_temp * ext_heating_rate + target_temp * ext_cooling_rate - complete_free_time_gap * ext_cooling_rate * ext_heating_rate) / (ext_cooling_rate + ext_heating_rate));
+#else
+    // Our approach: process_pre_cooling_and_heating() already passes
+    // target_temp = park_temp_nc for carousel blocks, so the floor is
+    // applied upstream. Short free window → mid_temp > park_temp naturally;
+    // long free window → intentional full cool + reheat from known warm state.
+    // WHY:
+    //   Injecting a per-extruder floor here couples carousel semantics into a
+    //   generic BBS-ported utility, making the logic implicit. Moving it upstream
+    //   keeps this function clean and the intent explicit at the call site.
+    const float reuse_cool_floor = room_temperature;  // no extra floor in this strategy
     float mid_temp = std::max(room_temperature, (curr_temp * ext_heating_rate + target_temp * ext_cooling_rate - complete_free_time_gap * ext_cooling_rate * ext_heating_rate) / (ext_cooling_rate + ext_heating_rate));
+#endif
     float heating_temp = target_temp - mid_temp;
     float heating_start_time = get_cum_time(preheat_move_iter_upper) - heating_temp / ext_heating_rate;
     auto heating_move_iter = std::upper_bound(move_iter_lower, preheat_move_iter_upper + 1, heating_start_time, [this](float time, const Slic3r::GCodeProcessorResult::MoveVertex& a) { return time < get_cum_time(m_moves.cbegin() + (&a - &m_moves[0])); });
