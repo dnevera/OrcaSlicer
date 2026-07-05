@@ -96,6 +96,10 @@ static void update_filament_config_values_for_multiple_extruders(
                         }
                     }
                 }
+                VORTEK_LOG(warn, "update_filament_config: filament=" << f_index
+                           << " extruder_type=" << (int)extruder_type
+                           << " nozzle_vol_type=" << (int)nozzle_volume_type
+                           << " → param_index=" << param_index << " (via nozzle_info)");
                 trim_param_indices.push_back(param_index);
             }
         } else {
@@ -118,7 +122,24 @@ static void update_filament_config_values_for_multiple_extruders(
                     }
                 }
             }
+            VORTEK_LOG(warn, "update_filament_config: filament=" << f_index
+                       << " extruder_type=" << (int)extruder_type
+                       << " nozzle_vol_type=" << (int)nozzle_volume_type
+                       << " → param_index=" << param_index << " (else branch)");
             trim_param_indices.push_back(param_index);
+        }
+    }
+
+    // Log trim_param_indices and filament_max_volumetric_speed before trim
+    {
+        std::string indices_str;
+        for (int idx : trim_param_indices) indices_str += std::to_string(idx) + ",";
+        VORTEK_LOG(warn, "update_filament_config: trim_param_indices=[" << indices_str << "]");
+        auto* mvs_opt = printer_config.option<Slic3r::ConfigOptionFloats>("filament_max_volumetric_speed");
+        if (mvs_opt) {
+            std::string mvs_str;
+            for (double v : mvs_opt->values) mvs_str += std::to_string(v) + ",";
+            VORTEK_LOG(warn, "update_filament_config: filament_max_volumetric_speed BEFORE trim=[" << mvs_str << "]");
         }
     }
 
@@ -153,6 +174,16 @@ static void update_filament_config_values_for_multiple_extruders(
             break;
         }
         default: break;
+        }
+    }
+
+    // Log filament_max_volumetric_speed after trim
+    {
+        auto* mvs_opt = printer_config.option<Slic3r::ConfigOptionFloats>("filament_max_volumetric_speed");
+        if (mvs_opt) {
+            std::string mvs_str;
+            for (double v : mvs_opt->values) mvs_str += std::to_string(v) + ",";
+            VORTEK_LOG(warn, "update_filament_config: filament_max_volumetric_speed AFTER trim=[" << mvs_str << "]");
         }
     }
 }
@@ -278,9 +309,6 @@ void PrintHooks::update_filament_maps_to_config(
 
             if (vol_type == Slic3r::nvtHybrid) {
                 // H2C Hybrid extruder: resolve dynamically from extruder_nozzle_stats.
-                // The physical HF nozzles occupy the LAST slots of the carousel (highest-indexed
-                // filaments on this extruder). Assign nvtHighFlow to the last N right filaments,
-                // where N = HF count from extruder_nozzle_stats.
                 int hf_count = (ext_idx < (int)hf_count_per_extruder.size()) ? hf_count_per_extruder[ext_idx] : 0;
                 int right_total = (int)right_filament_indices.size();
                 // Find this filament's position among Right filaments
@@ -288,16 +316,31 @@ void PrintHooks::update_filament_maps_to_config(
                 for (int k = 0; k < right_total; ++k) {
                     if (right_filament_indices[k] == (int)i) { right_pos = k; break; }
                 }
-                // Last hf_count right filaments → nvtHighFlow, rest → nvtStandard
-                if (hf_count > 0 && right_pos >= 0 && right_pos >= right_total - hf_count)
-                    vol_type = Slic3r::nvtHighFlow;
-                else
-                    vol_type = Slic3r::nvtStandard;
+                // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map write
+                // When VORTEK_DEBUG_HF_NOZZLE_OVERRIDE is active: assign HF to the FIRST Right filament(s),
+                // because the "last" filament slot may be unused in the model. This ensures at least one
+                // actually-printed filament gets HF variant speeds.
+                // In production (real HF nozzle): assign HF to the LAST Right filament(s),
+                // since real HF nozzles occupy the highest-numbered carousel slots.
+                if (VORTEK_DEBUG_HF_NOZZLE_OVERRIDE) {
+                    // Debug: FIRST hf_count right filaments → nvtHighFlow
+                    if (hf_count > 0 && right_pos >= 0 && right_pos < hf_count)
+                        vol_type = Slic3r::nvtHighFlow;
+                    else
+                        vol_type = Slic3r::nvtStandard;
+                } else {
+                    // Production: LAST hf_count right filaments → nvtHighFlow
+                    if (hf_count > 0 && right_pos >= 0 && right_pos >= right_total - hf_count)
+                        vol_type = Slic3r::nvtHighFlow;
+                    else
+                        vol_type = Slic3r::nvtStandard;
+                }
 
                 VORTEK_LOG(warn, "Step 2b: filament " << i << " on Hybrid extruder " << ext_idx
                            << " → " << (vol_type == Slic3r::nvtHighFlow ? "nvtHighFlow" : "nvtStandard")
                            << " (right_pos=" << right_pos << " of " << right_total
-                           << ", hf_count=" << hf_count << ")");
+                           << ", hf_count=" << hf_count
+                           << ", debug=" << VORTEK_DEBUG_HF_NOZZLE_OVERRIDE << ")");
             }
             final_volume_maps[i] = static_cast<int>(vol_type);
         }
