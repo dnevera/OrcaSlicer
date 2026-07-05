@@ -1317,7 +1317,8 @@ function updateInfoPanel(timeNum) {
         const eId = getExtIdForHeater(fd, htr);
         const eLbl = getExtLabel(fd, eId);
         const totalTimeStr = formatTime(fd.total_duration);
-        txt += "\n" + (idx+1) + ". " + fd.slicer + " (Total: " + totalTimeStr + "): T0=" + st.t0 + "°C T1=" + st.t1 + "°C [" + eLbl + ", " + fmtTool(st.active) + ": " + fType + " (" + fHex + ")]";
+        const printTimeStr = formatTime(fd.end_gcode_time || fd.total_duration);
+        txt += "\n" + (idx+1) + ". " + fd.slicer + " (Total: " + totalTimeStr + ", Print: " + printTimeStr + "): T0=" + st.t0 + "°C T1=" + st.t1 + "°C [" + eLbl + ", " + fmtTool(st.active) + ": " + fType + " (" + fHex + ")]";
     });
     el.innerText = txt; el.style.color = "#e4e4e7";
 }
