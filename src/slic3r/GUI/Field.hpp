@@ -518,6 +518,10 @@ public:
     wxWindow*       window{nullptr};
 	void			BUILD()  override;
 	bool			value_was_changed(wxTextCtrl* win);
+    // Expose base-class propagate_value() alongside the overload below.
+    // Required on Clang/macOS: without this, propagate_value(wxTextCtrl*) hides
+    // the base virtual propagate_value() and triggers -Woverloaded-virtual error.
+    using Field::propagate_value;
     // Propagate value from field to the OptionGroupe and Config after kill_focus/ENTER
     void            propagate_value(wxTextCtrl* win);
 	void			set_value(const Vec2d& value, bool change_event = false);
