@@ -38,6 +38,8 @@ class FilamentMapDialog : public wxDialog
         ptDefault
     };
 public:
+    // H2C: Added filament_volume_map for Hybrid HF/Standard assignment.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.hpp – FilamentMapDialog ctor
     FilamentMapDialog(wxWindow *parent,
         const std::vector<std::string>& filament_color,
         const std::vector<std::string>& filament_type,
@@ -46,13 +48,22 @@ public:
         const FilamentMapMode mode,
         bool machine_synced,
         bool show_default=true,
-        bool with_checkbox = false
+        bool with_checkbox = false,
+        const std::vector<int> &filament_volume_map = {}
     );
 
     FilamentMapMode get_mode();
     std::vector<int> get_filament_maps() const {
         if (m_page_type == PageType::ptManual)
             return m_filament_map;
+        return {};
+    }
+
+    // H2C: Returns filament_volume_map from dialog (HF/Standard assignments).
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.hpp – get_filament_volume_maps
+    std::vector<int> get_filament_volume_maps() const {
+        if (m_page_type == PageType::ptManual)
+            return m_filament_volume_map;
         return {};
     }
 
@@ -83,6 +94,7 @@ private:
 
 private:
     std::vector<int> m_filament_map;
+    std::vector<int> m_filament_volume_map;
     std::vector<std::string> m_filament_color;
     std::vector<std::string> m_filament_type;
 };

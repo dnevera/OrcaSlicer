@@ -12,11 +12,22 @@ namespace Slic3r { namespace GUI {
 class FilamentMapManualPanel : public wxPanel
 {
 public:
-    FilamentMapManualPanel(wxWindow *parent, const std::vector<std::string> &color, const std::vector<std::string> &type, const std::vector<int> &filament_list, const std::vector<int> &filament_map);
+    // H2C: added filament_volume_map parameter for Hybrid HF/Standard assignment.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.hpp – FilamentMapManualPanel ctor
+    FilamentMapManualPanel(wxWindow *parent, const std::vector<std::string> &color, const std::vector<std::string> &type,
+                           const std::vector<int> &filament_list, const std::vector<int> &filament_map,
+                           const std::vector<int> &filament_volume_map = {});
 
     std::vector<int> GetFilamentMaps() const { return m_filament_map; }
     std::vector<int> GetLeftFilaments() const { return m_left_panel->GetAllFilaments(); }
     std::vector<int> GetRightFilaments() const { return m_right_panel->GetAllFilaments(); }
+
+    // H2C: Returns per-filament volume map (nvtStandard=0, nvtHighFlow=1) based on drag-drop positions.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.hpp – GetFilamentVolumeMaps
+    std::vector<int> GetFilamentVolumeMaps() const;
+
+    std::vector<int> GetRightHighFlowFilaments() const { return m_right_panel->GetHighFlowFilaments(); }
+    std::vector<int> GetRightStandardFilaments() const { return m_right_panel->GetStandardFilaments(); }
 
     void Hide();
     void Show();
@@ -24,7 +35,7 @@ public:
 private:
     void           OnSwitchFilament(wxCommandEvent &);
     DragDropPanel *m_left_panel;
-    DragDropPanel *m_right_panel;
+    SeparatedDragDropPanel *m_right_panel;
 
     Label *m_description;
     Label *m_tips;
@@ -32,6 +43,7 @@ private:
     ScalableButton *m_switch_btn;
 
     std::vector<int>         m_filament_map;
+    std::vector<int>         m_filament_volume_map;
     std::vector<int>         m_filament_list;
     std::vector<std::string> m_filament_color;
     std::vector<std::string> m_filament_type;

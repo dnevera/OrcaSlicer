@@ -75,6 +75,16 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
         filament_lists = partplate_ref->get_extruders();
     }
 
+    // H2C: Read filament_volume_map for Hybrid HF/Standard assignment.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
+    std::vector<int> filament_volume_map;
+    {
+        auto opt_vm = full_config.option<ConfigOptionInts>("filament_volume_map");
+        if (opt_vm) {
+            filament_volume_map = opt_vm->values;
+        }
+    }
+
     FilamentMapDialog map_dlg(plater_ref,
         filament_colors,
         filament_types,
@@ -83,7 +93,8 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
         applied_mode,
         plater_ref->get_machine_sync_status(),
         false,
-        false
+        false,
+        filament_volume_map
     );
     auto ret = map_dlg.ShowModal();
 
@@ -110,6 +121,19 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
             if (new_mode == fmmManual)
                 plater_ref->set_global_filament_map(new_maps);
         }
+
+        // H2C: Write filament_volume_map back to project config from dialog.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up volume map write-back
+        if (new_mode == fmmManual) {
+            auto new_volume_map = map_dlg.get_filament_volume_maps();
+            if (!new_volume_map.empty()) {
+                auto* opt_vm = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
+                if (opt_vm) {
+                    opt_vm->values = new_volume_map;
+                }
+            }
+        }
+
         plater_ref->update();
         // check whether able to slice, if not, return false
         if (!get_left_extruder_unprintable_text().empty() || !get_right_extruder_unprintable_text().empty()){
@@ -120,6 +144,8 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
     return false;
 }
 
+// H2C: Added filament_volume_map parameter for Hybrid HF/Standard assignment.
+// Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – FilamentMapDialog ctor
 FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
                                      const std::vector<std::string> &filament_color,
                                      const std::vector<std::string> &filament_type,
@@ -128,8 +154,9 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
                                      const FilamentMapMode           mode,
                                      bool                            machine_synced,
                                      bool                            show_default,
-                                     bool                            with_checkbox)
-    : wxDialog(parent, wxID_ANY, _L("Filament grouping"), wxDefaultPosition, wxDefaultSize,wxDEFAULT_DIALOG_STYLE), m_filament_color(filament_color), m_filament_type(filament_type), m_filament_map(filament_map)
+                                     bool                            with_checkbox,
+                                     const std::vector<int>         &filament_volume_map)
+    : wxDialog(parent, wxID_ANY, _L("Filament grouping"), wxDefaultPosition, wxDefaultSize,wxDEFAULT_DIALOG_STYLE), m_filament_color(filament_color), m_filament_type(filament_type), m_filament_map(filament_map), m_filament_volume_map(filament_volume_map)
 {
     SetBackgroundColour(*wxWHITE);
 
@@ -171,7 +198,9 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
         mode == fmmAutoForMatch && !machine_synced ? fmmAutoForFlush :
         mode;
 
-    m_manual_map_panel                = new FilamentMapManualPanel(this, m_filament_color, m_filament_type, filaments, filament_map);
+    // H2C: Pass filament_volume_map to manual panel for Hybrid HF/Standard assignment.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – FilamentMapManualPanel ctor
+    m_manual_map_panel                = new FilamentMapManualPanel(this, m_filament_color, m_filament_type, filaments, filament_map, m_filament_volume_map);
     m_auto_map_panel                  = new FilamentMapAutoPanel(this, default_auto_mode, machine_synced);
     if (show_default)
         m_default_map_panel = new FilamentMapDefaultPanel(this);
@@ -281,6 +310,10 @@ void FilamentMapDialog::on_ok(wxCommandEvent &event)
                 m_filament_map[i] = 2;
             }
         }
+
+        // H2C: Collect filament_volume_map from manual panel (HF/Standard assignments).
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – on_ok
+        m_filament_volume_map = m_manual_map_panel->GetFilamentVolumeMaps();
     }
 
     EndModal(wxID_OK);

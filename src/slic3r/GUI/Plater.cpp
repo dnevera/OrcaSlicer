@@ -18467,6 +18467,16 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
     if (plate_filament_maps.size() != filament_colors.size())  // refine it later, save filament map to app config
         plate_filament_maps.resize(filament_colors.size(), 1);
 
+    // H2C: Read filament_volume_map from project config for Hybrid HF/Standard assignment.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp – FilamentMapDialog usage
+    std::vector<int> filament_volume_map;
+    {
+        auto opt_vm = project_config.option<ConfigOptionInts>("filament_volume_map");
+        if (opt_vm) {
+            filament_volume_map = opt_vm->values;
+        }
+    }
+
     FilamentMapDialog filament_dlg(this,
         filament_colors,
         filament_types,
@@ -18474,7 +18484,9 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
         curr_plate->get_extruders(true),
         plate_filament_map_mode,
         this->get_machine_sync_status(),
-        false
+        false,
+        false,
+        filament_volume_map
     );
 
     if (filament_dlg.ShowModal() == wxID_OK) {
@@ -18490,6 +18502,16 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
 
         if (new_map_mode == fmmManual){
             curr_plate->set_filament_maps(new_filament_maps);
+
+            // H2C: Write filament_volume_map back to project config from dialog.
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp – filament_volume_map write-back
+            auto new_volume_map = filament_dlg.get_filament_volume_maps();
+            if (!new_volume_map.empty()) {
+                auto* opt_vm = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
+                if (opt_vm) {
+                    opt_vm->values = new_volume_map;
+                }
+            }
         }
 
         bool need_invalidate = (old_map_mode != new_map_mode ||

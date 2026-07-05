@@ -1,5 +1,6 @@
 #include "FilamentMapPanel.hpp"
 #include "GUI_App.hpp"
+#include <libslic3r/PrintConfig.hpp>
 #include <wx/dcbuffer.h>
 #include <wx/utils.h>
 #include "wx/graphics.h"
@@ -18,12 +19,16 @@ static const wxColour TextNormalBlackColor = wxColour("#262E30");
 static const wxColour TextNormalGreyColor = wxColour("#6B6B6B");
 static const wxColour TextDisableColor = wxColour("#CECECE");
 
+// H2C: Updated constructor with filament_volume_map for Hybrid HF/Standard assignment.
+// Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – FilamentMapManualPanel ctor
 FilamentMapManualPanel::FilamentMapManualPanel(wxWindow                       *parent,
                                                const std::vector<std::string> &color,
                                                const std::vector<std::string> &type,
                                                const std::vector<int>         &filament_list,
-                                               const std::vector<int>         &filament_map)
-    : wxPanel(parent), m_filament_map(filament_map), m_filament_color(color), m_filament_type(type), m_filament_list(filament_list)
+                                               const std::vector<int>         &filament_map,
+                                               const std::vector<int>         &filament_volume_map)
+    : wxPanel(parent), m_filament_map(filament_map), m_filament_color(color), m_filament_type(type),
+      m_filament_list(filament_list), m_filament_volume_map(filament_volume_map)
 {
     SetBackgroundColour(BgNormalColor);
 
@@ -35,8 +40,36 @@ FilamentMapManualPanel::FilamentMapManualPanel(wxWindow                       *p
 
     auto drag_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    m_left_panel  = new DragDropPanel(this, _L("Left Nozzle"), false);
-    m_right_panel = new DragDropPanel(this, _L("Right Nozzle"), false);
+    // H2C: Build Left panel title with nozzle count like BBS.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleCountDisplay
+    auto* preset_bundle = wxGetApp().preset_bundle;
+    int left_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(0);
+    wxString left_label = wxString::Format(_L("Left Extruder(%d)"), left_count);
+    m_left_panel  = new DragDropPanel(this, left_label, false);
+
+    // H2C: Detect Hybrid mode from nozzle_volume_type to enable HF/Standard separation.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – SeparatedDragDropPanel usage
+    bool is_hybrid = false;
+    {
+        auto opt_nvt = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
+        if (opt_nvt && opt_nvt->values.size() > 1) {
+            is_hybrid = (opt_nvt->values[1] == static_cast<int>(Slic3r::nvtHybrid));
+        }
+    }
+
+    // H2C: Build Right panel title with nozzle counts from extruder_nozzle_stat.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleCountDisplay
+    wxString right_label;
+    if (is_hybrid) {
+        int standard_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtStandard);
+        int highflow_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtHighFlow);
+        right_label = wxString::Format(_L("Right Extruder(Std: %d, HF: %d)"), standard_count, highflow_count);
+    } else {
+        int right_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1);
+        right_label = wxString::Format(_L("Right Extruder(%d)"), right_count);
+    }
+
+    m_right_panel = new SeparatedDragDropPanel(this, right_label, is_hybrid);
     m_switch_btn  = new ScalableButton(this, wxID_ANY, "switch_filament_maps");
 
     for (size_t idx = 0; idx < m_filament_map.size(); ++idx) {
@@ -45,10 +78,14 @@ FilamentMapManualPanel::FilamentMapManualPanel(wxWindow                       *p
         wxColor color = Hex2Color(m_filament_color[idx]);
         std::string type = m_filament_type[idx];
         if (m_filament_map[idx] == 1) {
-            m_left_panel->AddColorBlock(color, type, idx + 1);
+            m_left_panel->AddColorBlock(color, type, idx + 1, false);
         } else {
             assert(m_filament_map[idx] == 2);
-            m_right_panel->AddColorBlock(color, type, idx + 1);
+            // H2C: Route to HF or Standard sub-panel based on filament_volume_map.
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – AddColorBlock with is_high_flow
+            bool is_hf = (!m_filament_volume_map.empty() && idx < m_filament_volume_map.size()
+                          && m_filament_volume_map[idx] == static_cast<int>(Slic3r::nvtHighFlow));
+            m_right_panel->AddColorBlock(color, type, idx + 1, is_hf, false);
         }
     }
     m_left_panel->SetMinSize({ FromDIP(260),-1 });
@@ -84,7 +121,7 @@ void FilamentMapManualPanel::OnSwitchFilament(wxCommandEvent &)
     auto right_blocks = m_right_panel->get_filament_blocks();
 
     for (auto &block : left_blocks) {
-        m_right_panel->AddColorBlock(block->GetColor(), block->GetType(), block->GetFilamentId(), false);
+        m_right_panel->AddColorBlock(block->GetColor(), block->GetType(), block->GetFilamentId(), false, false);
         m_left_panel->RemoveColorBlock(block, false);
     }
 
@@ -94,6 +131,22 @@ void FilamentMapManualPanel::OnSwitchFilament(wxCommandEvent &)
     }
     this->GetParent()->Layout();
     this->GetParent()->Fit();
+}
+
+// H2C: Build filament_volume_map from current drag-drop positions.
+// Filaments in HF zone → nvtHighFlow(1), all others → nvtStandard(0).
+// Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – GetFilamentVolumeMaps
+std::vector<int> FilamentMapManualPanel::GetFilamentVolumeMaps() const
+{
+    std::vector<int> result(m_filament_map.size(), static_cast<int>(Slic3r::nvtStandard));
+    auto hf_filaments = m_right_panel->GetHighFlowFilaments();
+    for (int fid : hf_filaments) {
+        int idx = fid - 1; // filament IDs are 1-based
+        if (idx >= 0 && idx < (int)result.size()) {
+            result[idx] = static_cast<int>(Slic3r::nvtHighFlow);
+        }
+    }
+    return result;
 }
 
 void FilamentMapManualPanel::Hide()
