@@ -48,11 +48,11 @@ void PlateMapping::sync_after_slicing(
         proj.set_key_value("physical_extruder_map", new Slic3r::ConfigOptionInts(phys_map));
 
     if (filament_map_mode != Slic3r::fmmManual && filament_map_mode != Slic3r::fmmNozzleManual) {
-        VORTEK_LOG(info, "sync_after_slicing: auto mode — synced project_config only (plate_config skipped)");
+        VORTEK_LOG(warn, "sync_after_slicing: auto mode — synced project_config only (plate_config skipped)");
         return;
     }
 
-    VORTEK_LOG(info, "sync_after_slicing: updating nozzle maps in plate config and project config");
+    VORTEK_LOG(warn, "sync_after_slicing: updating nozzle maps in plate config and project config");
 
     bool changed = false;
     auto* opt_nozzle = plate_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map");
@@ -67,9 +67,9 @@ void PlateMapping::sync_after_slicing(
     }
 
     if (changed) {
-        VORTEK_LOG(info, "sync_after_slicing: nozzle maps changed, updated plate + project config");
+        VORTEK_LOG(warn, "sync_after_slicing: nozzle maps changed, updated plate + project config");
     } else {
-        VORTEK_LOG(info, "sync_after_slicing: nozzle maps unchanged in plate config, synced to project config");
+        VORTEK_LOG(warn, "sync_after_slicing: nozzle maps unchanged in plate config, synced to project config");
     }
 }
 
@@ -135,7 +135,7 @@ LoadMappingResult PlateMapping::load_from_3mf_structure(
     if (!plate_data) return res;
     if (!is_h2c_printer(plate_data->config)) return res;
 
-    VORTEK_LOG(info, "load_from_3mf_structure: loading nozzle mappings");
+    VORTEK_LOG(warn, "load_from_3mf_structure: loading nozzle mappings");
 
     if (plate_data->config.has("filament_nozzle_map")) {
         res.filament_nozzle_map = plate_data->config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
@@ -156,7 +156,7 @@ LoadMappingResult PlateMapping::load_from_3mf_structure(
 void PlateMapping::sync_project_config_on_load(Slic3r::DynamicConfig& proj_cfg, int filament_count)
 {
     if (!is_h2c_printer(proj_cfg)) return;
-    VORTEK_LOG(info, "sync_project_config_on_load: verifying loaded map sizes");
+    VORTEK_LOG(warn, "sync_project_config_on_load: verifying loaded map sizes");
     
     // Сброс MQTT-зависимых флагов, которые должны приходить с принтера, а не считываться из 3MF
     if (auto* p = proj_cfg.option<Slic3r::ConfigOptionBool>("has_filament_switcher"))
@@ -208,17 +208,32 @@ void PlateMapping::patch_slice_filament_nozzle_groups(
             ++patched;
         }
     }
-    VORTEK_LOG(info, "patch_slice_filament_nozzle_groups: patched " << patched
+    VORTEK_LOG(warn, "patch_slice_filament_nozzle_groups: patched " << patched
                      << " filaments with nozzle group_ids from filament_nozzle_map");
 }
 
 std::vector<int> PlateMapping::get_nozzle_map_for_export(const Slic3r::Print* print, const Slic3r::DynamicPrintConfig& plate_config)
 {
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_nozzle_map export
+    // Priority: plate_config is set by BackgroundSlicingProcess::process() AFTER slicing via
+    // set_filament_nozzle_maps() with the correct multi-element array.
+    // print->full_print_config() may have been reset by a subsequent Print::apply() call.
+    // So: prefer plate_config if it has >1 element (post-slice initialized), else fall back to print.
+    if (plate_config.has("filament_nozzle_map")) {
+        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map");
+        if (plate_opt && plate_opt->values.size() > 1) {
+            VORTEK_LOG(warn, "get_nozzle_map_for_export: using plate_config nozzle map (" << plate_opt->values.size() << " elements)");
+            return plate_opt->values;
+        }
+    }
+    // Fallback: try print->full_print_config() (valid immediately after slicing)
     if (print && plate_config.has("filament_nozzle_map")) {
         const auto& full_cfg = print->full_print_config();
         if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")) {
-            VORTEK_LOG(info, "get_nozzle_map_for_export: using print-derived nozzle map");
-            return opt->values;
+            if (opt->values.size() > 1) {
+                VORTEK_LOG(warn, "get_nozzle_map_for_export: using print-derived nozzle map (" << opt->values.size() << " elements)");
+                return opt->values;
+            }
         }
     }
     if (plate_config.has("filament_nozzle_map")) {
@@ -229,11 +244,26 @@ std::vector<int> PlateMapping::get_nozzle_map_for_export(const Slic3r::Print* pr
 
 std::vector<int> PlateMapping::get_volume_map_for_export(const Slic3r::Print* print, const Slic3r::DynamicPrintConfig& plate_config)
 {
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map export
+    // Priority: plate_config is set by BackgroundSlicingProcess::process() AFTER slicing via
+    // set_filament_volume_maps() with the correct multi-element array.
+    // print->full_print_config() may have been reset by a subsequent Print::apply() call.
+    // So: prefer plate_config if it has >1 element (post-slice initialized), else fall back to print.
+    if (plate_config.has("filament_volume_map")) {
+        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        if (plate_opt && plate_opt->values.size() > 1) {
+            VORTEK_LOG(warn, "get_volume_map_for_export: using plate_config volume map (" << plate_opt->values.size() << " elements)");
+            return plate_opt->values;
+        }
+    }
+    // Fallback: try print->full_print_config() (valid immediately after slicing)
     if (print && plate_config.has("filament_volume_map")) {
         const auto& full_cfg = print->full_print_config();
         if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_volume_map")) {
-            VORTEK_LOG(info, "get_volume_map_for_export: using print-derived volume map");
-            return opt->values;
+            if (opt->values.size() > 1) {
+                VORTEK_LOG(warn, "get_volume_map_for_export: using print-derived volume map (" << opt->values.size() << " elements)");
+                return opt->values;
+            }
         }
     }
     if (plate_config.has("filament_volume_map")) {
@@ -255,7 +285,7 @@ void PlateMapping::patch_plate_data_for_export(
     if (print && !is_h2c_printer(*print)) return;
     if (!print && !config.has("filament_nozzle_map")) return;
 
-    VORTEK_LOG(info, "patch_plate_data_for_export for plate index " << plate_data->plate_index);
+    VORTEK_LOG(warn, "patch_plate_data_for_export for plate index " << plate_data->plate_index);
 
     std::vector<int> nozzle_map = filament_nozzle_map;
     std::vector<int> volume_map = filament_volume_map;
@@ -279,7 +309,7 @@ void PlateMapping::handle_h2c_mapping_apply(
         auto new_nozzle = new_full_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
         auto old_nozzle = old_full_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
         if (new_nozzle != old_nozzle) {
-            VORTEK_LOG(info, "handle_h2c_mapping_apply: synchronizing config update");
+            VORTEK_LOG(warn, "handle_h2c_mapping_apply: synchronizing config update");
         }
     }
 }
@@ -363,7 +393,7 @@ void PlateMapping::filter_full_config_diff(Slic3r::t_config_option_keys& full_co
 
     size_t suppressed = full_config_diff.size() - filtered.size();
     if (suppressed > 0) {
-        VORTEK_LOG(info, "filter_full_config_diff: suppressed " << suppressed
+        VORTEK_LOG(warn, "filter_full_config_diff: suppressed " << suppressed
                          << " variant-transformed keys from full_config_diff");
         full_config_diff = std::move(filtered);
     }
@@ -397,7 +427,7 @@ void PlateMapping::filter_print_diff_set(
                     full_print_config.set_key_value(k, new_opt->clone());
                 }
             }
-            VORTEK_LOG(info, "filter_print_diff_set: suppressed and synced key '" << k << "'");
+            VORTEK_LOG(warn, "filter_print_diff_set: suppressed and synced key '" << k << "'");
         }
     }
 }

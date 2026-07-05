@@ -606,12 +606,16 @@ void ExtruderNozzleStat::on_printer_model_change(PresetBundle* preset_bundle)
         //   so we must store Standard to match the nvtStandard entries in final_volume_maps.
         // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301
         //   BBL extruder_nozzle_stats = ['Standard#1', 'Standard#4'] for H2C Hybrid.
+        // count: Left (eid=0) fixed to 1 slot; Right carousel uses max_nozzle_count.
+        // nvtHybrid: do NOT collapse to nvtStandard here. The actual per-slot mix
+        // (Standard vs HighFlow) is set later by sync_machine_nozzle_inventory_to_preset
+        // (VortekDeviceHooks.cpp) when a real machine is connected.
+        // In offline/preset-change context, nvtHybrid is stored as-is; the ndfMachine flag
+        // will protect these counts from being overwritten when live sync runs.
+        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301
         int count = max_nozzle_count->values[eid];
         if (is_h2c && eid == 0) {
             count = 1;  // Left fixed nozzle: only 1 slot
-        }
-        if (type == nvtHybrid) {
-            type = nvtStandard;  // H2C carousel: Hybrid mode uses Standard-type slots
         }
         set_extruder_nozzle_count(eid, type, count, true);
     }
@@ -637,12 +641,14 @@ void ExtruderNozzleStat::on_printer_model_change_cli(const std::vector<int>& noz
         // Left (eid=0) → count=1; Right carousel (eid>0) → keep max_nozzle_count.
         // nvtHybrid → nvtStandard: carousel slots are Standard-type for nozzle matching.
         // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L319
+        // count: Left (eid=0) fixed to 1 slot; Right carousel uses max_nozzle_count.
+        // nvtHybrid: do NOT collapse to nvtStandard. In CLI/offline mode without a live
+        // machine sync, nvtHybrid is kept as-is. With VORTEK_DEBUG_HF_NOZZLE_OVERRIDE the
+        // actual HighFlow counts will be injected during sync regardless.
+        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L319
         int count = max_nozzle_count[eid];
         if (is_h2c && eid == 0) {
             count = 1;  // Left fixed nozzle: only 1 slot
-        }
-        if (type == nvtHybrid) {
-            type = nvtStandard;  // H2C carousel: Hybrid mode uses Standard-type slots
         }
         set_extruder_nozzle_count(eid, type, count, true);
     }

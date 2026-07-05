@@ -89,14 +89,23 @@ void GroupReorder::handle_manual_mode_reorder(
 
     VORTEK_LOG(warn, "handle_manual_mode_reorder: carousel used in Manual mode — initializing nozzle_group_result via update_filament_maps_to_config");
 
-    // Call update_filament_maps_to_config with the EXISTING user map (no recomputation).
-    // Side-effect: builds and stores nozzle_group_result so the GCodeProcessor
-    // pre-cooling/pre-heating post-processor (gated on get_nozzle_group_result()) runs.
-    // The hook is idempotent: matching maps → no rewrite → no re-slice loop.
+    // Call update_filament_maps_to_config with EMPTY volume/nozzle maps so that
+    // Step 1 (nozzle slot assignment) and Step 2 (volume type from nozzle_volume_type)
+    // are always fully recalculated from filament_maps.
+    //
+    // BUG that was fixed: previously we passed print->config().filament_volume_map.values
+    // and print->config().filament_nozzle_map.values here. If the project was saved with
+    // stale 1-element maps (e.g. loaded from an old 3MF), the idempotency guard in
+    // update_filament_maps_to_config would see the 1-element maps as matching the
+    // (also 1-element) computed result and return early → maps never expanded to full
+    // filament count → 3MF saved with ['1'] and ['0'] instead of 5-element arrays.
+    //
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp (filament_nozzle_map write)
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp (on_printer_model_change)
     print->update_filament_maps_to_config(
         filament_maps,
-        print->config().filament_volume_map.values,
-        print->config().filament_nozzle_map.values);
+        std::vector<int>(),   // force Step 2 to rebuild volume types from nozzle_volume_type
+        std::vector<int>());  // force Step 1 to rebuild carousel slot assignments from filament_maps
 }
 
 } // namespace Vortek

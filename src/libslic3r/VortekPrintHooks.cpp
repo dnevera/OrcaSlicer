@@ -100,8 +100,11 @@ static void update_filament_config_values_for_multiple_extruders(
             }
         } else {
             // filament not used in slicing
-            if ((extruder_nozzle_volume_count > extruder_count) && (!filament_volume_maps.empty())) {
-                nozzle_volume_type = (Slic3r::NozzleVolumeType) (filament_volume_maps[f_index]);
+            // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp:8599
+            // For H2C Hybrid extruders: also override nozzle_volume_type from filament_volume_map.
+            if ((extruder_nozzle_volume_count > extruder_count || nozzle_volume_type == Slic3r::nvtHybrid)
+                && (!filament_volume_maps.empty()) && (f_index < (int)filament_volume_maps.size())) {
+                nozzle_volume_type = (Slic3r::NozzleVolumeType)(filament_volume_maps[f_index]);
             }
             int param_index = printer_config.get_index_for_extruder(f_index + 1, id_name, extruder_type, nozzle_volume_type, variant_name);
             if (param_index < 0) {
@@ -227,33 +230,79 @@ void PrintHooks::update_filament_maps_to_config(
     }
 
     // Step 2: Compute final_volume_maps from printer nozzle_volume_type per extruder (if not provided).
+    // For nvtHybrid extruders (H2C Hybrid mode): resolve to nvtStandard or nvtHighFlow dynamically
+    // based on extruder_nozzle_stats (which was built by VortekDeviceHooks from physical nozzle flow types).
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp – on_printer_model_change
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp   – get_extruder_nozzle_stats
     std::vector<int> final_volume_maps = f_volume_maps;
     if (final_volume_maps.empty() && !f_maps.empty()) {
         auto opt_nozzle_volume_type = dynamic_cast<const Slic3r::ConfigOptionEnumsGeneric*>(
             print.m_ori_full_print_config.option("nozzle_volume_type"));
-        final_volume_maps.resize(f_maps.size(), Slic3r::nvtStandard);
+
+        // Parse extruder_nozzle_stats to know per-extruder HF nozzle count.
+        // VortekDeviceHooks writes this from physical carousel slot flow types,
+        // e.g. "Standard#4|HighFlow#1" when one carousel slot has an HF nozzle.
+        auto opt_stats = print.m_full_print_config.option<Slic3r::ConfigOptionStrings>("extruder_nozzle_stats");
+        std::vector<std::string> stats_values = opt_stats ? opt_stats->values : std::vector<std::string>();
+        auto nozzle_stats = Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(stats_values);
+
+        // Step 2b: Resolve nvtHybrid dynamically per extruder using extruder_nozzle_stats.
+        // Build a per-extruder HighFlow nozzle count from stats.
+        // We then assign nvtHighFlow to the LAST Right-extruder filament(s) that match the HF count,
+        // and nvtStandard to all others. "Last" = highest carousel slot index assigned in Step 1
+        // (slots are assigned 4→1, so the LAST filament in f_maps order gets the lowest slot).
+        // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map write
+        std::vector<int> hf_count_per_extruder(nozzle_stats.size(), 0);
+        for (size_t eid = 0; eid < nozzle_stats.size(); ++eid) {
+            // nozzle_stats[eid] is std::map<NozzleVolumeType, int> — use standard map access
+            const auto& slot_map = nozzle_stats[eid];
+            auto it = slot_map.find(Slic3r::nvtHighFlow);
+            hf_count_per_extruder[eid] = (it != slot_map.end()) ? it->second : 0;
+        }
+
+        final_volume_maps.resize(f_maps.size(), static_cast<int>(Slic3r::nvtStandard));
+
+        // Count how many Right-extruder filaments exist to assign HF slots from the end.
+        // Index of right filaments in order they appear in f_maps:
+        std::vector<int> right_filament_indices;
+        for (int i = 0; i < (int)f_maps.size(); ++i) {
+            if (f_maps[i] == 2) // Right extruder (1-based)
+                right_filament_indices.push_back(i);
+        }
+
         for (size_t i = 0; i < f_maps.size(); ++i) {
-            int ext_idx = f_maps[i] - 1; // 0-based
+            int ext_idx = f_maps[i] - 1; // 0-based extruder index
+            Slic3r::NozzleVolumeType vol_type = Slic3r::nvtStandard;
             if (opt_nozzle_volume_type && ext_idx >= 0 && ext_idx < (int)opt_nozzle_volume_type->size())
-                final_volume_maps[i] = opt_nozzle_volume_type->get_at(ext_idx);
+                vol_type = static_cast<Slic3r::NozzleVolumeType>(opt_nozzle_volume_type->get_at(ext_idx));
+
+            if (vol_type == Slic3r::nvtHybrid) {
+                // H2C Hybrid extruder: resolve dynamically from extruder_nozzle_stats.
+                // The physical HF nozzles occupy the LAST slots of the carousel (highest-indexed
+                // filaments on this extruder). Assign nvtHighFlow to the last N right filaments,
+                // where N = HF count from extruder_nozzle_stats.
+                int hf_count = (ext_idx < (int)hf_count_per_extruder.size()) ? hf_count_per_extruder[ext_idx] : 0;
+                int right_total = (int)right_filament_indices.size();
+                // Find this filament's position among Right filaments
+                int right_pos = -1;
+                for (int k = 0; k < right_total; ++k) {
+                    if (right_filament_indices[k] == (int)i) { right_pos = k; break; }
+                }
+                // Last hf_count right filaments → nvtHighFlow, rest → nvtStandard
+                if (hf_count > 0 && right_pos >= 0 && right_pos >= right_total - hf_count)
+                    vol_type = Slic3r::nvtHighFlow;
+                else
+                    vol_type = Slic3r::nvtStandard;
+
+                VORTEK_LOG(warn, "Step 2b: filament " << i << " on Hybrid extruder " << ext_idx
+                           << " → " << (vol_type == Slic3r::nvtHighFlow ? "nvtHighFlow" : "nvtStandard")
+                           << " (right_pos=" << right_pos << " of " << right_total
+                           << ", hf_count=" << hf_count << ")");
+            }
+            final_volume_maps[i] = static_cast<int>(vol_type);
         }
     }
 
-    // Step 2b: Normalize nvtHybrid → nvtStandard in volume map for H2C printers.
-    // nvtHybrid is a UI-level indicator for the Hybrid extruder mode; it is NOT a physical
-    // nozzle type. The carousel slots are Standard-type nozzles regardless of Hybrid mode.
-    // LayeredNozzleGroupResult::create() matches each filament by (extruder_id, volume_type):
-    //   - nozzle_list is built from extruder_nozzle_stats where Right carousel = nvtStandard
-    //     (fixed in on_printer_model_change: nvtHybrid → nvtStandard, count=max_nozzle_count).
-    //   - Therefore filament volume_type must also be nvtStandard, not nvtHybrid.
-    // BBL reference: filament_volume_map=['0','0','0','0','0'] = all nvtStandard.
-    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp filament_volume_map init.
-    if (is_h2c_printer(print)) {
-        for (auto& v : final_volume_maps) {
-            if (v == static_cast<int>(Slic3r::nvtHybrid))
-                v = static_cast<int>(Slic3r::nvtStandard);
-        }
-    }
 
     // Step 3: Always build and set LayeredNozzleGroupResult on the print object
     // to enable the GCodeProcessor's PreCooling and PreHeating post-processors.
@@ -319,6 +368,11 @@ void PrintHooks::update_filament_maps_to_config(
             if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true)) {
                 opt->values = final_volume_maps;
             }
+            // H2C: also sync to m_config (typed PrintConfig) so that 3MF export reads the correct
+            // full-size array. m_ori_full_print_config / m_full_print_config are DynamicPrintConfig
+            // and are NOT automatically synced back to the typed m_config used for 3MF save.
+            // Reference to BBS: BambuStudio/src/libslic3r/Print.cpp – filament_map direct m_config write
+            print.m_config.filament_volume_map.values = final_volume_maps;
         }
 
         if (nozzle_changed) {
@@ -329,21 +383,48 @@ void PrintHooks::update_filament_maps_to_config(
             if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map", true)) {
                 opt->values = final_nozzle_maps;
             }
+            // H2C: also sync to m_config directly (same reason as filament_volume_map above).
+            // Reference to BBS: BambuStudio/src/libslic3r/Print.cpp – filament_map direct m_config write
+            print.m_config.filament_nozzle_map.values = final_nozzle_maps;
         }
+
     } else {
         VORTEK_LOG(debug, "update_filament_maps_to_config: all maps unchanged, skipping (idempotent)");
         return; // Nothing to do — stop here to avoid unnecessary work
     }
 
     // Step 5: Rebuild extruder retract overrides (only when something changed).
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp:8599
+    // Standard variant resolution doesn't handle nvtHybrid (missing || nozzle_volume_type == nvtHybrid).
+    // Build filament_extruder_map from f_maps + final_volume_maps and use our isolated resolver.
     {
         // Rebuild m_full_print_config so that printer extruders are populated.
         print.m_full_print_config = print.m_ori_full_print_config;
 
+        int extruder_count = print.config().nozzle_diameter.values.size();
+        auto opt_extruder_type = print.m_full_print_config.option<Slic3r::ConfigOptionEnumsGeneric>("extruder_type");
+
+        std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> filament_extruder_map;
+        for (int fidx = 0; fidx < (int)f_maps.size(); ++fidx) {
+            int ext_idx = f_maps[fidx] - 1; // 0-based
+            Slic3r::ExtruderNozleInfo info;
+            info.extruder_type = opt_extruder_type
+                ? Slic3r::ExtruderType(opt_extruder_type->get_at(ext_idx))
+                : Slic3r::etDirectDrive;
+            // Use resolved volume type from final_volume_maps (nvtStandard or nvtHighFlow),
+            // NOT the preset's nvtHybrid.
+            info.nozzle_volume_type = (fidx < (int)final_volume_maps.size())
+                ? Slic3r::NozzleVolumeType(final_volume_maps[fidx])
+                : Slic3r::nvtStandard;
+            filament_extruder_map[fidx] = {info};
+        }
+
         std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
         filament_keys.insert("filament_self_index");
-        print.m_full_print_config.update_values_to_printer_extruders_for_multiple_filaments(
-            print.m_full_print_config, filament_keys, "filament_self_index", "filament_extruder_variant");
+        update_filament_config_values_for_multiple_extruders(
+            print.m_full_print_config, filament_extruder_map,
+            extruder_count, extruder_count + 1, // ensure extruder_volume_type_count > extruder_count
+            filament_keys, "filament_self_index", "filament_extruder_variant");
 
         const std::vector<std::string>& extruder_retract_keys = Slic3r::print_config_def.extruder_retract_keys();
         const std::string               filament_prefix       = "filament_";
