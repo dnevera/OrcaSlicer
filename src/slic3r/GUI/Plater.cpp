@@ -1596,13 +1596,23 @@ static std::optional<NozzleOption> deserialize_nozzle_option(const std::string& 
 
 std::optional<NozzleOption> Sidebar::priv::get_nozzle_options(MachineObject *obj, int extruder_count, bool support_multi_nozzle, bool is_manual)
 {
-    if (extruder_count < 2 || !support_multi_nozzle)
+    BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] get_nozzle_options: extruder_count=" << extruder_count
+        << " support_multi_nozzle=" << support_multi_nozzle << " is_manual=" << is_manual;
+    if (extruder_count < 2 || !support_multi_nozzle) {
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] get_nozzle_options: EARLY EXIT — extruder_count<2 or !support_multi_nozzle";
         return std::nullopt;
-    if (!obj || !obj->GetNozzleSystem()) return std::nullopt;
+    }
+    if (!obj || !obj->GetNozzleSystem()) {
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] get_nozzle_options: EARLY EXIT — obj or nozzle_system null";
+        return std::nullopt;
+    }
     auto nozzle_system = obj->GetNozzleSystem();
 
     PresetBundle *preset_bundle = wxGetApp().preset_bundle;
-    if (!preset_bundle) return std::nullopt;
+    if (!preset_bundle) {
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] get_nozzle_options: EARLY EXIT — preset_bundle null";
+        return std::nullopt;
+    }
 
     std::string curr_dev_id = obj->get_dev_id();
     // Build the current physical nozzle configuration from v2's device model:
@@ -1740,7 +1750,13 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
     // For non-multi-nozzle printers nozzle_option stays empty and behavior is unchanged.
     auto extruder_max_nozzle_count = cur_preset.config.option<ConfigOptionIntsNullable>("extruder_max_nozzle_count")->values;
     bool support_multi_nozzle = std::any_of(extruder_max_nozzle_count.begin(), extruder_max_nozzle_count.end(), [](int val){ return val > 1; });
+    BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] sync_extruder_list: extruder_nums=" << extruder_nums
+        << " support_multi_nozzle=" << support_multi_nozzle
+        << " is_manual=" << is_manual
+        << " printer_type=" << obj->printer_type
+        << " nozzle_system=" << (obj->GetNozzleSystem() ? "ok" : "NULL");
     auto nozzle_option = get_nozzle_options(obj, extruder_nums, support_multi_nozzle, is_manual);
+    BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] sync_extruder_list: nozzle_option=" << (nozzle_option ? "HAS_VALUE" : "nullopt");
     if (!nozzle_option && support_multi_nozzle)
         return false;
 
@@ -4398,13 +4414,17 @@ bool Sidebar::is_multifilament()
 void Sidebar::deal_btn_sync() {
     m_begin_sync_printer_status = true;
     bool only_external_material;
-    auto ok = p->sync_extruder_list(only_external_material);
+    // Pass is_manual=true so the nozzle picker dialog always appears on explicit user action.
+    // Auto-sync paths (on printer connect / reslice) use is_manual=false and reuse the cached config.
+    // Reference to BBS: Plater.cpp get_nozzle_options is_manual branch.
+    auto ok = p->sync_extruder_list(only_external_material, /*is_manual=*/true);
     if (ok) {
         pop_sync_nozzle_and_ams_dialog();
     }
     m_begin_sync_printer_status = false;
     wxGetApp().plater()->update_machine_sync_status();
 }
+
 
 template<typename T> void setup_dialog_position(T& info)
 {

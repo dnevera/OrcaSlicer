@@ -1132,11 +1132,32 @@ std::optional<NozzleOption> tryPopUpMultiNozzleDialog(MachineObject* obj)
 {
     if (!obj)
         return std::nullopt;
-    // The rack lives in the Vortek device-hooks registry, keyed by nozzle system.
-    auto rack = Vortek::DeviceHooks::get_nozzle_rack(obj->GetNozzleSystem());
-    if (!rack || !rack->IsSupported())
+    // For H2C printers the rack may not yet exist in the registry if no MQTT push arrived yet
+    // (rack is normally created in parse_device_state / set_support_nozzle_rack on push receipt).
+    // Use get_or_create to ensure it exists, then mark it supported for H2C.
+    // For non-H2C we keep the read-only get_nozzle_rack path so we don't accidentally create racks.
+    // Reference to BBS: DeviceManager.cpp parse_new_info, VortekDeviceHooks.cpp set_support_nozzle_rack.
+    bool is_h2c = Vortek::DeviceHooks::is_h2c_printer(obj);
+    BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] tryPopUpMultiNozzleDialog: obj=" << obj
+        << " printer_type=" << obj->printer_type
+        << " is_h2c=" << is_h2c;
+    std::shared_ptr<VortekNozzleRack> rack;
+    if (is_h2c) {
+        rack = Vortek::DeviceHooks::get_or_create_nozzle_rack(obj);
+        if (rack) rack->SetSupported(true);
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] tryPopUpMultiNozzleDialog: H2C path rack="
+            << (rack ? "created" : "NULL") << " IsSupported=" << (rack ? rack->IsSupported() : false);
+    } else {
+        rack = Vortek::DeviceHooks::get_nozzle_rack(obj->GetNozzleSystem());
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] tryPopUpMultiNozzleDialog: non-H2C path rack="
+            << (rack ? "found" : "NULL") << " IsSupported=" << (rack ? rack->IsSupported() : false);
+    }
+    if (!rack || !rack->IsSupported()) {
+        BOOST_LOG_TRIVIAL(warning) << "[H2C-Sync] tryPopUpMultiNozzleDialog: EARLY EXIT — rack null or not supported";
         return std::nullopt;
+    }
     MultiNozzleSyncDialog dialog(wxGetApp().plater_,rack);
+
 
     bool has_unreliable = rack->HasUnreliableNozzles();
     bool has_unknown = rack->HasUnknownNozzles();

@@ -126,6 +126,10 @@ static std::map<const Slic3r::DevAms*, std::optional<int>> s_ams_binded_switcher
 static std::map<const Slic3r::MachineObject*, std::shared_ptr<Slic3r::VortekNozzleMappingCtrl>> s_nozzle_mappings;
 static std::map<const Slic3r::MachineObject*, std::shared_ptr<Slic3r::VortekFilaSwitch>> s_fila_switches;
 
+// Forward declaration — defined at line ~679 (after store_wtm_firmware_info section).
+bool is_h2c_printer(const Slic3r::MachineObject* obj);
+
+
 bool is_nozzle_empty(const Slic3r::DevNozzle& nozzle) {
     return nozzle.m_nozzle_id == -1 || nozzle.m_nozzle_type == Slic3r::ntUndefine || nozzle.m_diameter < 0.01f;
 }
@@ -435,9 +439,15 @@ void set_support_nozzle_rack(Slic3r::MachineObject* obj, bool supported) {
     if (!obj) return;
     auto rack = get_or_create_nozzle_rack(obj);
     if (rack) {
+        // H2C always has a carousel nozzle rack — firmware may not set bit-60 in `fun`,
+        // so override here for H2C regardless of the reported flag.
+        // Reference to BBS: DeviceManager.cpp parse_new_info, fun-bit-60 path.
+        if (is_h2c_printer(obj))
+            supported = true;
         rack->SetSupported(supported);
     }
 }
+
 
 void parse_device_state(Slic3r::MachineObject* obj, const nlohmann::json& device_json) {
     if (!obj) return;
@@ -446,6 +456,11 @@ void parse_device_state(Slic3r::MachineObject* obj, const nlohmann::json& device
         auto rack = get_or_create_nozzle_rack(obj);
         if (rack) {
             rack->ParseRackInfo(device_json["holder"]);
+            // "holder" key present in firmware push ↔ physical rack is installed.
+            // bit-60 of fun is a BBS capability flag that H2C firmware may not set,
+            // so we cannot rely solely on set_support_nozzle_rack(…, get_flag_bits(fun,60)).
+            // Reference: DeviceManager.cpp parse_new_info, VortekDeviceHooks.cpp set_support_nozzle_rack.
+            rack->SetSupported(true);
         }
     }
 
