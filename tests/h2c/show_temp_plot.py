@@ -104,7 +104,9 @@ def determine_heater_to_extruder(track, extruder_map):
     return {1: 1, 2: 0}
 
 
-def build_timeline_and_interpolate(track, tool_changes, m73_points, total_lines):
+def build_timeline_and_interpolate(track, tool_changes, m73_points, total_lines, m400_weights=None):
+    if m400_weights is None:
+        m400_weights = {}
     m73_points = sorted(list(set([(p[0], p[1]) for p in m73_points])))
     # Filter to only keep the first occurrence of each unique remaining time value
     filtered_m73 = []
@@ -147,6 +149,8 @@ def build_timeline_and_interpolate(track, tool_changes, m73_points, total_lines)
         for l in range(line1, line2 + 1):
             is_tc = track_m620.get(l, False)
             w = 500.0 if is_tc else 1.0
+            if l in m400_weights:
+                w += m400_weights[l] * 50.0
             weights.append((l, w))
             total_w += w
             
@@ -196,10 +200,29 @@ def parse_file_data(filepath):
             track_raw = stats["temp_track"]
             m73_points = stats.get("m73_points", [])
 
-            # Parse TC, Wipe Tower and Toolchange zones from raw gcode
+            # Find the start of machine end gcode to cut off non-printing trailing commands (e.g. air filtration wait)
+            end_gcode_line = total_lines
+            for name in z.namelist():
+                if name.endswith('.gcode'):
+                    gcode_text = z.read(name).decode('utf-8', errors='replace')
+                    gcode_lines = gcode_text.split('\n')
+                    for i in range(len(gcode_lines) - 1, -1, -1):
+                        gl = gcode_lines[i]
+                        line_num = i + 1
+                        if ';' in gl and '=' not in gl:
+                            if 'MACHINE_END_GCODE_START' in gl or 'filament end gcode' in gl or 'machine: H2C end' in gl:
+                                end_gcode_line = line_num
+                                break
+                    break
+
+            # Keep end_gcode_line but do not trim data arrays to preserve full time duration
+            pass
+
+            # Parse TC, Wipe Tower, Toolchange zones and M400 weights from raw gcode
             tc_zones_raw = []  # list of (start_line, end_line)
             wipe_zones_raw = []  # list of (start_line, end_line)
             toolchange_zones_raw = []  # list of (start_line, end_line)
+            m400_weights = {}
             for name in z.namelist():
                 if name.endswith('.gcode'):
                     gcode_text = z.read(name).decode('utf-8', errors='replace')
@@ -209,6 +232,16 @@ def parse_file_data(filepath):
                     tc_block_start = None
                     for i, gl in enumerate(gcode_lines):
                         line_num = i + 1
+                        # Parse M400 delay commands
+                        if 'M400' in gl:
+                            import re
+                            m_s = re.search(r'M400\s+S(\d+)', gl)
+                            if m_s:
+                                m400_weights[line_num] = float(m_s.group(1))
+                            else:
+                                m_p = re.search(r'M400\s+P(\d+)', gl)
+                                if m_p:
+                                    m400_weights[line_num] = float(m_p.group(1)) * 0.001
                         # Match both Orca and BBS toolchange start comments
                         if 'CP TOOLCHANGE START' in gl:
                             tc_block_start = line_num
@@ -272,7 +305,8 @@ def parse_file_data(filepath):
                     "desc": desc,
                 })
 
-        total_duration, get_time = build_timeline_and_interpolate(track, tool_changes, m73_points, total_lines)
+        total_duration, get_time = build_timeline_and_interpolate(track, tool_changes, m73_points, total_lines, m400_weights)
+        end_gcode_time = get_time(end_gcode_line)
         
         # Convert preheat lines to time (seconds)
         preheats = []
@@ -308,8 +342,44 @@ def parse_file_data(filepath):
                 t_end = t_start + estimated_dur
             return {"start_time": t_start, "end_time": t_end}
 
-        tc_zones = [zone_to_time(s, e) for s, e in tc_zones_raw]
-        wipe_zones = [zone_to_time(s, e) for s, e in wipe_zones_raw]
+        # Sequence nozzle changes (tc_zones) and wipe tower blocks (wipe_zones) sequentially
+        # to prevent visual overlaps caused by artificial duration extension.
+        all_sub_zones = []
+        for s, e in tc_zones_raw:
+            all_sub_zones.append({"type": "nc", "start_line": s, "end_line": e})
+        for s, e in wipe_zones_raw:
+            all_sub_zones.append({"type": "wipe", "start_line": s, "end_line": e})
+            
+        all_sub_zones.sort(key=lambda z: z["start_line"])
+        
+        tc_zones = []
+        wipe_zones = []
+        prev_end_time = -1.0
+        min_dur = 8.0
+        
+        for zone in all_sub_zones:
+            s_line = zone["start_line"]
+            e_line = zone["end_line"]
+            t_start = get_time(s_line)
+            t_end = get_time(e_line)
+            
+            actual_dur = t_end - t_start
+            dur = actual_dur
+            if actual_dur < min_dur:
+                dur = max(min_dur, (e_line - s_line) * 0.15)
+                
+            if t_start < prev_end_time:
+                t_start = prev_end_time
+                
+            t_end = t_start + dur
+            prev_end_time = t_end
+            
+            formatted_zone = {"start_time": t_start, "end_time": t_end}
+            if zone["type"] == "nc":
+                tc_zones.append(formatted_zone)
+            else:
+                wipe_zones.append(formatted_zone)
+                
         toolchange_zones = [zone_to_time(s, e) for s, e in toolchange_zones_raw]
 
 
@@ -331,6 +401,7 @@ def parse_file_data(filepath):
             "slicer": slicer_name,
             "total_lines": total_lines,
             "total_duration": total_duration,
+            "end_gcode_time": end_gcode_time,
             "filaments": filaments,
             "nozzle_map": nozzle_map,
             "extruder_groups": extruder_groups,
@@ -674,6 +745,29 @@ function draw() {
         ctx.lineWidth = isNozzle ? 1 : 1.5;
         ctx.strokeRect(marginLeft, p.yStart, visibleWidth, pH);
 
+        // End G-code zone (end_gcode_time → total_duration) — dark grey / hatched
+        if (!isNozzle && p.file.end_gcode_time) {
+            const xS = scaleX(p.file.end_gcode_time), xE = scaleX(p.file.total_duration);
+            const l = Math.max(marginLeft, xS), r = Math.min(marginLeft + visibleWidth, xE);
+            if (l < r) {
+                ctx.fillStyle = "rgba(75, 85, 99, 0.15)";
+                ctx.fillRect(l, p.yStart, r - l, pH);
+                
+                ctx.strokeStyle = "rgba(156, 163, 175, 0.5)";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(l, p.yStart);
+                ctx.lineTo(l, p.yStart + pH);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                ctx.fillStyle = "#9ca3af";
+                ctx.font = "9px sans-serif";
+                ctx.fillText("End G-code", l + 6, p.yStart + 12);
+            }
+        }
+
         // TC zones (NOZZLE_CHANGE_START → END) — purple, deepest background layer
         if (!isNozzle && p.file.tc_zones) {
             p.file.tc_zones.forEach(z => {
@@ -824,7 +918,8 @@ function drawTempLine(yStart, pH, heater, fileData, scaleX, scaleY, visibleWidth
         const in_tc1 = inToolchangeZone(fileData, pt1.time);
         const in_wipe1 = inWipeZone(fileData, pt1.time);
         const is_printing1 = !in_tc1 || in_wipe1;
-        const active = isActiveOnPanel(fileData, pt1.active, heater) && is_printing1 && pt1.printing_started;
+        const is_end_gcode1 = fileData.end_gcode_time && pt1.time >= fileData.end_gcode_time;
+        const active = isActiveOnPanel(fileData, pt1.active, heater) && is_printing1 && pt1.printing_started && !is_end_gcode1;
         let color = "#4b5563";
         if (active && temp1 >= 190) color = getFilColor(fileData, pt1.active);
 
@@ -844,7 +939,8 @@ function drawTempLine(yStart, pH, heater, fileData, scaleX, scaleY, visibleWidth
             const in_tc2 = inToolchangeZone(fileData, pt2.time);
             const in_wipe2 = inWipeZone(fileData, pt2.time);
             const is_printing2 = !in_tc2 || in_wipe2;
-            const nextActive = isActiveOnPanel(fileData, pt2.active, heater) && is_printing2 && pt2.printing_started;
+            const is_end_gcode2 = fileData.end_gcode_time && pt2.time >= fileData.end_gcode_time;
+            const nextActive = isActiveOnPanel(fileData, pt2.active, heater) && is_printing2 && pt2.printing_started && !is_end_gcode2;
             let nc = "#4b5563";
             if (nextActive && temp2 >= 190) nc = getFilColor(fileData, pt2.active);
             ctx.strokeStyle = (temp2 > temp1) ? nc : color;
@@ -891,7 +987,8 @@ function drawNozzlePanel(panel, scaleX, scaleY, visibleWidth) {
         const in_tc = inToolchangeZone(fileData, track[i].time);
         const in_wipe = inWipeZone(fileData, track[i].time);
         const is_printing = !in_tc || in_wipe;
-        const on = (track[i].active === filId) && (t >= 190) && is_printing && track[i].printing_started;
+        const is_end_gcode = fileData.end_gcode_time && track[i].time >= fileData.end_gcode_time;
+        const on = (track[i].active === filId) && (t >= 190) && is_printing && track[i].printing_started && !is_end_gcode;
         if (on && aStart === -1) aStart = i;
         else if (!on && aStart !== -1) { activeIdxRanges.push({ s: aStart, e: i - 1 }); aStart = -1; }
     }
@@ -1179,19 +1276,25 @@ function drawTooltips(scaleX, scaleY, visibleWidth, plotW) {
             ctx.fillStyle="#ffffff"; ctx.font="bold 11px system-ui";
             ctx.fillText(temp + "°C", ttX+100, currentY+57);
 
+            let activeText = fmtTool(state.active);
+            let isEndGCode = p.file.end_gcode_time && timeNum >= p.file.end_gcode_time;
+            if (isEndGCode) {
+                activeText = "End G-code";
+            }
             ctx.font="11px system-ui"; ctx.fillStyle="#a1a1aa";
             ctx.fillText("Active:", ttX+12, currentY+73);
             ctx.fillStyle="#ffffff"; ctx.font="bold 11px system-ui";
-            ctx.fillText(fmtTool(state.active), ttX+100, currentY+73);
+            ctx.fillText(activeText, ttX+100, currentY+73);
 
             ctx.font="11px system-ui"; ctx.fillStyle="#a1a1aa";
             ctx.fillText("Filament:", ttX+12, currentY+89);
             let dc = filColor;
-            if (!activeOnThisPanel) dc = "#4b5563";
+            if (!activeOnThisPanel || isEndGCode) dc = "#4b5563";
             else if (dc.toUpperCase()==="#FFFFFF") dc = "#e4e4e7";
             ctx.fillStyle = dc; ctx.fillRect(ttX+100, currentY+81, 8, 8);
             ctx.fillStyle="#ffffff"; ctx.font="bold 11px system-ui";
-            if (!activeOnThisPanel) ctx.fillText("Idle", ttX+114, currentY+89);
+            if (isEndGCode) ctx.fillText("N/A", ttX+114, currentY+89);
+            else if (!activeOnThisPanel) ctx.fillText("Idle", ttX+114, currentY+89);
             else ctx.fillText(filType + " (" + filColor.toUpperCase() + ")", ttX+114, currentY+89);
 
             ctx.fillStyle = sc; ctx.beginPath(); ctx.arc(mouseX, yPos, 5, 0, Math.PI*2); ctx.fill();
