@@ -239,6 +239,22 @@ void PrintHooks::update_filament_maps_to_config(
         }
     }
 
+    // Step 2b: Normalize nvtHybrid → nvtStandard in volume map for H2C printers.
+    // nvtHybrid is a UI-level indicator for the Hybrid extruder mode; it is NOT a physical
+    // nozzle type. The carousel slots are Standard-type nozzles regardless of Hybrid mode.
+    // LayeredNozzleGroupResult::create() matches each filament by (extruder_id, volume_type):
+    //   - nozzle_list is built from extruder_nozzle_stats where Right carousel = nvtStandard
+    //     (fixed in on_printer_model_change: nvtHybrid → nvtStandard, count=max_nozzle_count).
+    //   - Therefore filament volume_type must also be nvtStandard, not nvtHybrid.
+    // BBL reference: filament_volume_map=['0','0','0','0','0'] = all nvtStandard.
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp filament_volume_map init.
+    if (is_h2c_printer(print)) {
+        for (auto& v : final_volume_maps) {
+            if (v == static_cast<int>(Slic3r::nvtHybrid))
+                v = static_cast<int>(Slic3r::nvtStandard);
+        }
+    }
+
     // Step 3: Always build and set LayeredNozzleGroupResult on the print object
     // to enable the GCodeProcessor's PreCooling and PreHeating post-processors.
     if (!f_maps.empty()) {

@@ -210,6 +210,30 @@ int calculate_extruder_tab_selection_index(
     int                               extruder_id,
     Slic3r::NozzleVolumeType          nozzle_type);
 
+/**
+ * @brief Inverse of calculate_extruder_tab_selection_index.
+ *        Given a flat tab-strip selection index, resolves (extruder_id, nozzle_type)
+ *        accounting for H2C Hybrid extruders occupying 2 tab slots each.
+ *
+ * @param printer_model    e.g. "Bambu Lab H2C"
+ * @param selection        flat tab index selected by the user
+ * @param extruder_nums    total number of extruders
+ * @param volume_values    nozzle_volume_type values array (one per extruder)
+ * @param out_extruder_id  [out] resolved extruder index
+ * @param out_nozzle_type  [out] resolved NozzleVolumeType (nvtStandard or nvtHighFlow)
+ * @return true if the selection was handled (H2C Hybrid slot); false otherwise.
+ *
+ * Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp
+ *   parse_extruder_selection, nvtHybrid block.
+ */
+bool parse_hybrid_extruder_selection(
+    const std::string&              printer_model,
+    int                             selection,
+    int                             extruder_nums,
+    const std::vector<int>&         volume_values,
+    int&                            out_extruder_id,
+    Slic3r::NozzleVolumeType&       out_nozzle_type);
+
 } // namespace DeviceHooks
 } // namespace Vortek
 

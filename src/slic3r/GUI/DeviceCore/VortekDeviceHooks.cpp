@@ -1006,5 +1006,56 @@ int calculate_extruder_tab_selection_index(
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// parse_hybrid_extruder_selection
+// ---------------------------------------------------------------------------
+// Inverse of calculate_extruder_tab_selection_index.
+// Given a flat tab-strip selection index, resolves (extruder_id, nozzle_type),
+// accounting for H2C Hybrid extruders that occupy 2 slots (Standard + High Flow).
+//
+// Returns true and fills extruder_id/nozzle_type when the selection falls on
+// an H2C Hybrid slot; returns false for all other printers / volume types so
+// the caller falls through to the standard single-slot path.
+//
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp parse_extruder_selection,
+//   nvtHybrid block.
+// ---------------------------------------------------------------------------
+bool parse_hybrid_extruder_selection(
+    const std::string&              printer_model,
+    int                             selection,
+    int                             extruder_nums,
+    const std::vector<int>&         volume_values,
+    int&                            out_extruder_id,
+    Slic3r::NozzleVolumeType&       out_nozzle_type)
+{
+    // Guard: only H2C printers can have Hybrid extruders.
+    if (!boost::algorithm::contains(printer_model, "H2C"))
+        return false;
+
+    int current_index = 0;
+    for (int i = 0; i < extruder_nums; ++i) {
+        if (i >= (int)volume_values.size())
+            break;
+        const auto vt = static_cast<Slic3r::NozzleVolumeType>(volume_values[i]);
+        if (vt == Slic3r::NozzleVolumeType::nvtHybrid) {
+            // This extruder occupies 2 tab slots.
+            if (selection == current_index) {
+                out_extruder_id  = i;
+                out_nozzle_type  = Slic3r::NozzleVolumeType::nvtStandard;
+                return true;
+            } else if (selection == current_index + 1) {
+                out_extruder_id  = i;
+                out_nozzle_type  = Slic3r::NozzleVolumeType::nvtHighFlow;
+                return true;
+            }
+            current_index += 2;
+        } else {
+            // Non-hybrid: 1 slot — not handled by this function.
+            current_index += 1;
+        }
+    }
+    return false;
+}
+
 } // namespace DeviceHooks
 } // namespace Vortek

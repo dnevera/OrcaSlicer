@@ -618,25 +618,38 @@ void Tab::parse_extruder_selection(int selection, int &extruder_id, NozzleVolume
         NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
 
         // TODO: Orca: Support hybrid
-        //if (volume_type == NozzleVolumeType::nvtHybrid) {
-        //    if (selection == current_index) {
-        //        extruder_id = i;
-        //        nozzle_type = NozzleVolumeType::nvtStandard;
-        //        return;
-        //    } else if (selection == current_index + 1) {
-        //        extruder_id = i;
-        //        nozzle_type = NozzleVolumeType::nvtHighFlow;
-        //        return;
-        //    }
-        //    current_index += 2;
-        //} else {
-            if (selection == current_index) {
-                extruder_id = i;
-                nozzle_type = volume_type;
+        // H2C Vortek hook: for H2C Hybrid extruders, delegate the reverse mapping
+        // (tab_index → extruder_id + nozzle_type) to the Vortek layer.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp parse_extruder_selection,
+        //   nvtHybrid block.
+        if (volume_type == NozzleVolumeType::nvtHybrid) {
+            const std::string printer_model_str =
+                m_preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+            int               tmp_ext_id   = 0;
+            NozzleVolumeType  tmp_noz_type = NozzleVolumeType::nvtStandard;
+            if (Vortek::DeviceHooks::parse_hybrid_extruder_selection(
+                    printer_model_str, selection, extruder_nums,
+                    nozzle_volumes->values, tmp_ext_id, tmp_noz_type)) {
+                extruder_id = tmp_ext_id;
+                nozzle_type = tmp_noz_type;
                 return;
             }
-            current_index += 1;
-        //}
+            // Non-H2C with nvtHybrid (shouldn't happen, but fall through gracefully).
+        }
+
+        if (selection == current_index) {
+            extruder_id = i;
+            nozzle_type = volume_type;
+            return;
+        }
+        // H2C Hybrid occupies 2 slots; all others occupy 1.
+        {
+            const std::string printer_model_str =
+                m_preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+            const bool is_h2c_hybrid = (volume_type == NozzleVolumeType::nvtHybrid) &&
+                                       boost::algorithm::contains(printer_model_str, "H2C");
+            current_index += is_h2c_hybrid ? 2 : 1;
+        }
     }
 
     extruder_id = 0;
