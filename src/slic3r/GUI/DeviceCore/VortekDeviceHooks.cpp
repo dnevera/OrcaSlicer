@@ -1,6 +1,6 @@
 #include "VortekDeviceHooks.hpp"
 #include "VortekProtocolExtension.h"
-#include "slic3r/GUI/DeviceManager.hpp"
+#include "slic3r/GUI/DeviceCore/DevManager.h"
 #include "slic3r/GUI/DeviceCore/DevNozzleSystem.h"
 #include "slic3r/GUI/DeviceCore/VortekNozzleRack.h"
 #include "slic3r/GUI/DeviceCore/VortekFilaSwitch.h"
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <boost/algorithm/string.hpp>
 
 namespace Vortek {
 namespace DeviceHooks {
@@ -889,6 +890,120 @@ void reset_nozzle_system(Slic3r::DevNozzleSystem* system)
     if (rack && rack->IsSupported()) {
         rack->ClearRackNozzles();
     }
+}
+
+// H2C Vortek hook: returns true if the given nozzle volume type should be shown in the extruder UI
+// beyond what is already declared in the printer preset's extruder_variant_list.
+// Currently: nvtHybrid is shown only for H2C printers with an active nozzle rack (carousel).
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp extruder_variant_list lambda,
+//   extruder_max_nozzle_count > 1 check.
+bool should_show_nozzle_variant(
+    const std::string&                      printer_model,
+    const std::string&                      variant_list_entry,
+    const std::string&                      extruder_type_label,
+    const Slic3r::ConfigOptionDef*          nozzle_volumes_def,
+    size_t                                  nozzle_type_idx,
+    const Slic3r::ConfigOptionIntsNullable* max_nozzle_count_opt,
+    int                                     extruder_idx)
+{
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp extruder_variant_list lambda.
+    // 1. Standard check: variant declared in preset's extruder_variant_list.
+    const std::string& label = nozzle_volumes_def->enum_labels[nozzle_type_idx];
+    if (boost::algorithm::contains(variant_list_entry, extruder_type_label + " " + label))
+        return true;
+
+    // 2. H2C-only: show nvtHybrid when carousel rack is present (max_nozzle_count > 1).
+    //    Only for H2C printers; all other printers exit here immediately.
+    if (!boost::algorithm::contains(printer_model, "H2C")) return false;
+
+    // enum_values[i] is a string key, enum_keys_map maps string -> int enum value.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp extruder_variant_list lambda,
+    //   nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == nvtHybrid check.
+    const auto& enum_key = nozzle_volumes_def->enum_values[nozzle_type_idx];
+    auto it = nozzle_volumes_def->enum_keys_map->find(enum_key);
+    if (it == nozzle_volumes_def->enum_keys_map->end()) return false;
+    const auto nvt = static_cast<Slic3r::NozzleVolumeType>(it->second);
+    if (nvt != Slic3r::NozzleVolumeType::nvtHybrid) return false;
+
+    // Carousel rack: extruder_max_nozzle_count > 1 for this extruder slot.
+    int max_nozzle_cnt = (max_nozzle_count_opt && extruder_idx < (int)max_nozzle_count_opt->values.size())
+        ? max_nozzle_count_opt->values[extruder_idx] : 1;
+    return max_nozzle_cnt > 1;
+}
+
+} // namespace DeviceHooks
+} // namespace Vortek
+
+
+// =============================================================================
+// Tab extruder-tab UI hooks — H2C Hybrid (Vortek layer)
+// =============================================================================
+//
+// These functions encapsulate ALL H2C-specific logic for the extruder tab-strip
+// so that Tab.cpp contains only thin, stateless call-through hooks.
+//
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp
+//   generate_extruder_options, nvtHybrid block;
+//   calculate_selection_index_for_extruder, nvtHybrid block.
+
+namespace Vortek {
+namespace DeviceHooks {
+
+// ---------------------------------------------------------------------------
+// get_hybrid_extruder_tab_names
+// ---------------------------------------------------------------------------
+// Returns {"<extruder_name>: Standard", "<extruder_name>: High Flow"} for an
+// H2C printer with a Hybrid extruder; returns an empty vector for all others.
+// ---------------------------------------------------------------------------
+std::vector<wxString> get_hybrid_extruder_tab_names(
+    const std::string&        printer_model,
+    const wxString&           extruder_name,
+    Slic3r::NozzleVolumeType  volume_type)
+{
+    // Guard: only H2C printers with a Hybrid volume type need expansion.
+    if (volume_type != Slic3r::NozzleVolumeType::nvtHybrid)
+        return {};
+    if (!boost::algorithm::contains(printer_model, "H2C"))
+        return {};
+
+    return {
+        wxString::Format(_L("%s: %s"), extruder_name, _L("Standard")),
+        wxString::Format(_L("%s: %s"), extruder_name, _L("High Flow"))
+    };
+}
+
+// ---------------------------------------------------------------------------
+// calculate_extruder_tab_selection_index
+// ---------------------------------------------------------------------------
+// Computes the flat index into the extruder tab-strip for (extruder_id,
+// nozzle_type).  On H2C, a Hybrid extruder occupies 2 slots; on all other
+// printers it occupies 1 slot.
+// ---------------------------------------------------------------------------
+int calculate_extruder_tab_selection_index(
+    const std::string&         printer_model,
+    int                        extruder_nums,
+    const std::vector<int>&    volume_values,
+    int                        extruder_id,
+    Slic3r::NozzleVolumeType   nozzle_type)
+{
+    const bool is_h2c = boost::algorithm::contains(printer_model, "H2C");
+
+    int index = 0;
+    for (int i = 0; i < extruder_nums; ++i) {
+        const auto vt = static_cast<Slic3r::NozzleVolumeType>(volume_values[i]);
+        const bool is_hybrid_slot = (vt == Slic3r::NozzleVolumeType::nvtHybrid) && is_h2c;
+
+        if (i == extruder_id) {
+            // For H2C Hybrid: Standard → index, High Flow → index+1.
+            if (is_hybrid_slot && nozzle_type == Slic3r::NozzleVolumeType::nvtHighFlow)
+                return index + 1;
+            return index;
+        }
+
+        // Skip-count: Hybrid occupies 2 slots on H2C, 1 everywhere else.
+        index += is_hybrid_slot ? 2 : 1;
+    }
+    return 0;
 }
 
 } // namespace DeviceHooks

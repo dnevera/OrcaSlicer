@@ -10,6 +10,8 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#include <wx/string.h>
+
 #include "DevDefs.h"
 #include "DevNozzleSystem.h"
 #include "DevFirmware.h"
@@ -141,6 +143,72 @@ void clear_auto_nozzle_mapping(Slic3r::MachineObject* obj);
 void preprocess_filament_json(Slic3r::MachineObject* obj, nlohmann::json& filament_json);
 void apply_pending_ams_bindings(Slic3r::DevFilaSystem* fila_system);
 bool apply_nozzle_mapping_from_device(Slic3r::MachineObject* obj, Slic3r::GUI::PartPlate* plate);
+
+// H2C Vortek hook: single entry point for nozzle variant visibility in the extruder combo.
+// Encapsulates both the standard preset check (extruder_variant_list) and H2C-specific
+// Hybrid mode logic (nvtHybrid shown only for H2C with carousel rack).
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp extruder_variant_list lambda,
+//   extruder_max_nozzle_count > 1 triggers Hybrid display.
+// Parameters:
+//   printer_model       — e.g. "Bambu Lab H2C"
+//   variant_list_entry  — extruder_variants->values[extruder_idx] (comma-separated preset variants)
+//   extruder_type_label — extruders_def->enum_labels[extruders->values[extruder_idx]]
+//   nozzle_volumes_def  — the ConfigOptionEnumGeneric* for printer_nozzle_volume_type
+//   nozzle_type_idx     — loop index i into nozzle_volumes_def
+//   max_nozzle_count_opt— extruder_max_nozzle_count option (may be nullptr)
+//   extruder_idx        — which extruder (0=left/DEPUTY, 1=right/MAIN for H2C)
+bool should_show_nozzle_variant(
+    const std::string&                              printer_model,
+    const std::string&                              variant_list_entry,
+    const std::string&                              extruder_type_label,
+    const Slic3r::ConfigOptionDef*                  nozzle_volumes_def,
+    size_t                                          nozzle_type_idx,
+    const Slic3r::ConfigOptionIntsNullable*         max_nozzle_count_opt,
+    int                                             extruder_idx);
+
+// ---------------------------------------------------------------------------
+// Tab extruder-tab UI hooks (H2C Hybrid)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief For H2C Hybrid extruders, generates the two sub-tab labels.
+ *        For all other printers / volume types, returns an empty vector
+ *        (caller falls through to the standard single-tab path).
+ *
+ * @param printer_model    e.g. "Bambu Lab H2C"
+ * @param extruder_name    Localised extruder name, e.g. "Right"
+ * @param volume_type      NozzleVolumeType of the current extruder
+ * @return vector of 2 wxStrings {"Right: Standard", "Right: High Flow"},
+ *         or empty if no expansion is needed.
+ *
+ * Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp
+ *   generate_extruder_options, nvtHybrid block.
+ */
+std::vector<wxString> get_hybrid_extruder_tab_names(
+    const std::string&         printer_model,
+    const wxString&            extruder_name,
+    Slic3r::NozzleVolumeType   volume_type);
+
+/**
+ * @brief Returns the tab-list index for (extruder_id, nozzle_type),
+ *        accounting for H2C Hybrid extruders occupying 2 slots each.
+ *
+ * @param printer_model    e.g. "Bambu Lab H2C"
+ * @param extruder_nums    total number of extruders
+ * @param volume_values    nozzle_volume_type values array (one per extruder)
+ * @param extruder_id      target extruder index
+ * @param nozzle_type      which sub-type to resolve (Standard / High Flow)
+ * @return tab list index, or 0 on error.
+ *
+ * Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp
+ *   calculate_selection_index_for_extruder, nvtHybrid block.
+ */
+int calculate_extruder_tab_selection_index(
+    const std::string&                printer_model,
+    int                               extruder_nums,
+    const std::vector<int>&           volume_values,
+    int                               extruder_id,
+    Slic3r::NozzleVolumeType          nozzle_type);
 
 } // namespace DeviceHooks
 } // namespace Vortek

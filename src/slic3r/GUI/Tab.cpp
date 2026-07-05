@@ -25,6 +25,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
+#include "DeviceCore/VortekDeviceHooks.hpp" // H2C Vortek hooks
 #include "libslic3r/libslic3r.h"
 #include "slic3r/GUI/OptionsGroup.hpp"
 #include "wxExtensions.hpp"
@@ -653,9 +654,14 @@ int Tab::calculate_selection_index_for_extruder(int extruder_id, NozzleVolumeTyp
         if (i == extruder_id) {
             // TODO: Orca: Support hybrid
             NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
-            /*if (volume_type == NozzleVolumeType::nvtHybrid) {
-                return nozzle_type == NozzleVolumeType::nvtHighFlow ? index + 1 : index;
-            } else*/ {
+            if (volume_type == NozzleVolumeType::nvtHybrid) {
+                // H2C Vortek hook: Hybrid occupies 2 tab slots on H2C (Standard + High Flow).
+                // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp calculate_selection_index_for_extruder, nvtHybrid block.
+                const std::string printer_model_str =
+                    m_preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+                return Vortek::DeviceHooks::calculate_extruder_tab_selection_index(
+                    printer_model_str, extruder_nums, nozzle_volumes->values, extruder_id, nozzle_type);
+            } /*else*/ {
                 return index;
             }
         }
@@ -7818,15 +7824,33 @@ std::vector<wxString> Tab::generate_extruder_options()
         int ext_id = (i == 0) ? DEPUTY_EXTRUDER_ID : MAIN_EXTRUDER_ID;
         wxString extruder_name = _L(DevPrinterConfigUtil::get_toolhead_display_name(
             pt, ext_id, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase, true));
+        if (i >= (int)nozzle_volumes->values.size()) {
+            // Safety: fewer volume entries than extruders — use Standard as fallback.
+            options.push_back(wxString::Format(_L("%s: %s"), extruder_name, get_nozzle_volume_type_name(NozzleVolumeType::nvtStandard)));
+            continue;
+        }
         NozzleVolumeType volume_type = NozzleVolumeType(nozzle_volumes->values[i]);
+
         
         // TODO: Orca: Support hybrid
         /*if (volume_type == NozzleVolumeType::nvtHybrid) {
             options.push_back(wxString::Format(_L("%s: %s"), extruder_name, _L("Standard")));
             options.push_back(wxString::Format(_L("%s: %s"), extruder_name, _L("High Flow")));
         } else*/ {
-            wxString volume_name = get_nozzle_volume_type_name(volume_type);
-            options.push_back(wxString::Format(_L("%s: %s"), extruder_name, volume_name));
+            // H2C Vortek hook: delegate to Vortek layer; returns 2 labels for H2C Hybrid,
+            // empty vector for all other printers / volume types.
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp generate_extruder_options, nvtHybrid block.
+            const std::string printer_model_str =
+                m_preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+            auto hybrid_tabs = Vortek::DeviceHooks::get_hybrid_extruder_tab_names(
+                printer_model_str, extruder_name, volume_type);
+            if (!hybrid_tabs.empty()) {
+                for (auto& label : hybrid_tabs)
+                    options.push_back(label);
+            } else {
+                wxString volume_name = get_nozzle_volume_type_name(volume_type);
+                options.push_back(wxString::Format(_L("%s: %s"), extruder_name, volume_name));
+            }
         }
     }
     return options;

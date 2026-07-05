@@ -3149,7 +3149,11 @@ void Sidebar::update_presets(Preset::Type preset_type)
             int select = -1;
             for (size_t i = 0; i < nozzle_volumes_def->enum_labels.size(); ++i) {
                 if (boost::algorithm::contains(extruder_variants->values[index], type + " " + nozzle_volumes_def->enum_labels[i]) /*||
-                    extruder_max_nozzle_count->values[index] > 1 && nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == nvtHybrid*/) { // TODO: Orca: Support hybrid
+                    extruder_max_nozzle_count->values[index] > 1 && nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == nvtHybrid*/ // TODO: Orca: Support hybrid
+                    // H2C Vortek hook: Hybrid support for H2C carousel extruder (nvtHybrid when max_nozzle_count > 1).
+                    || Vortek::DeviceHooks::should_show_nozzle_variant(printer_model,
+                        extruder_variants->values[index], type, nozzle_volumes_def, i,
+                        extruder_max_nozzle_count, index)) {
                     if (nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == NozzleVolumeType::nvtHighFlow &&(diameter == "0.2" ||
                         is_skip_high_flow_printer(printer_model)))
                         continue;
