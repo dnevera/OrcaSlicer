@@ -57,6 +57,9 @@ std::string PrePrintChecker::get_print_status_info(PrintDialogStatus status)
     case PrintStatusReadingFinished: return "PrintStatusReadingFinished";
     case PrintStatusSendingCanceled: return "PrintStatusSendingCanceled";
     case PrintStatusAmsMappingSuccess: return "PrintStatusAmsMappingSuccess";
+    case PrintStatusRackNozzleMappingWaiting: return "PrintStatusRackNozzleMappingWaiting";
+    case PrintStatusRackNozzleMappingError: return "PrintStatusRackNozzleMappingError";
+    case PrintStatusRackNozzleMappingWarning: return "PrintStatusRackNozzleMappingWarning";
     case PrintStatusReadyToGo: return "PrintStatusReadyToGo";
     case PrintStatusNotOnTheSameLAN: return "PrintStatusNotOnTheSameLAN";
     case PrintStatusNotSupportedSendToSDCard: return "PrintStatusNotSupportedSendToSDCard";

@@ -324,6 +324,7 @@ private:
     std::vector<MachineObject*>         m_list;
     std::vector<FilamentInfo>           m_filaments;
     std::vector<FilamentInfo>           m_ams_mapping_result;
+    std::unordered_map<int, int>        m_nozzle_mapping_result; // H2C: fila_id -> physical nozzle pos
     std::vector<int>                    m_filaments_map;
     std::shared_ptr<BBLStatusBarPrint>  m_status_bar;
     std::unique_ptr<Worker>             m_worker;
@@ -506,6 +507,9 @@ public:
     bool do_ams_mapping(MachineObject *obj_,bool use_ams);
     bool get_ams_mapping_result(std::string& mapping_array_str, std::string& mapping_array_str2, std::string& ams_mapping_info) const;
     bool build_nozzles_info(std::string& nozzles_info);
+    // H2C: gate "ready to go" until the printer's auto nozzle-rack mapping is synced (V0 only).
+    bool use_dynamic_nozzle_map() const;
+    bool CheckErrorSyncNozzleMappingResultV0(MachineObject* obj_);
     bool can_hybrid_mapping(DevExtderSystem data);
     void auto_supply_with_ext(std::vector<DevAmsTray> slots);
     bool is_nozzle_type_match(DevExtderSystem data, wxString& error_message) const;

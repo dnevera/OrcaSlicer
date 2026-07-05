@@ -1309,6 +1309,10 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
         } else if (map_mode == FilamentMapMode::fmmManual) {
             // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp (PR#1 / commit 284ae6e2a5)
             // H2C hook: delegate to Vortek isolated layer.
+            // The hook initializes nozzle_group_result for carousel prints (extruder 2),
+            // enabling M632 pre-cooling/pre-heating in Manual filament-map mode.
+            // Without this, Manual-mode carousel prints emitted zero M632 priming → carousel stall.
+            // Reference: galantsev/add_h2c_v2 commit a9e6b96310.
             ::Vortek::GroupReorder::handle_manual_mode_reorder(m_print, filament_maps);
         }
 

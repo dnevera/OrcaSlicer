@@ -231,6 +231,17 @@ else
     exit 1
 fi
 
+# Capture the git commit hash on the host. The flatpak manifest copies the
+# source tree without .git (see the `type: dir` sources), so CMake cannot read
+# the hash inside the sandbox and would embed the "0000000" placeholder. We pass
+# it in via the `git_commit_hash` env var that CMakeLists.txt reads at configure.
+GIT_COMMIT_HASH=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "")
+if [[ -n "$GIT_COMMIT_HASH" ]]; then
+    echo -e "Commit: ${GREEN}$GIT_COMMIT_HASH${NC}"
+else
+    echo -e "Commit: ${YELLOW}unknown (not a git checkout) — build info will show 0000000${NC}"
+fi
+
 # Cleanup build directory if requested
 if [[ "$CLEANUP" == true ]]; then
     echo -e "${YELLOW}Cleaning up flatpak-specific build directories...${NC}"
@@ -315,14 +326,81 @@ if [[ "$DISABLE_ROFILES_FUSE" == true ]]; then
     echo -e "${YELLOW}rofiles-fuse disabled${NC}"
 fi
 
-# Use a temp manifest with no-debuginfo if requested
-MANIFEST="scripts/flatpak/com.orcaslicer.OrcaSlicer.yml"
+# Build from a generated manifest so we can inject the commit hash (and
+# optionally the no-debuginfo tweak) without touching the checked-in manifest.
+SRC_MANIFEST="scripts/flatpak/com.orcaslicer.OrcaSlicer.yml"
+MANIFEST="scripts/flatpak/com.orcaslicer.OrcaSlicer.generated.yml"
+cp "$SRC_MANIFEST" "$MANIFEST"
+
+# Inject the commit hash only into the OrcaSlicer module's cmake configure step.
+# Prefixing the env var on that one command (rather than the global
+# build-options) keeps the wxWidgets/deps module caches valid across commits —
+# only the OrcaSlicer module rebuilds when the hash changes.
+if [[ -n "$GIT_COMMIT_HASH" ]]; then
+    sed -i "s#cmake \. -B build_flatpak#git_commit_hash=\"$GIT_COMMIT_HASH\" cmake . -B build_flatpak#" "$MANIFEST"
+    echo -e "${GREEN}Embedding commit hash $GIT_COMMIT_HASH into build info${NC}"
+fi
+
 if [[ "$NO_DEBUGINFO" == true ]]; then
-    MANIFEST="scripts/flatpak/com.orcaslicer.OrcaSlicer.no-debug.yml"
-    sed '/^build-options:/a\  no-debuginfo: true\n  strip: true' \
-        scripts/flatpak/com.orcaslicer.OrcaSlicer.yml > "$MANIFEST"
+    sed -i '/^build-options:/a\  no-debuginfo: true\n  strip: true' "$MANIFEST"
     echo -e "${YELLOW}Debug info disabled (using temp manifest)${NC}"
 fi
+
+# --- Content-addressed deps so orca_deps actually cache-hits ----------------
+# flatpak-builder NEVER caches `type: dir` sources (builder-source-dir.c uses a
+# random checksum by design: "We can't realistically checksum a directory, so
+# always rebuild"). That forced a full ~30 min Boost/CGAL/OCCT/OpenCV rebuild of
+# the orca_deps module on EVERY run. Fix: pack deps/ into a DETERMINISTIC tarball
+# and rewrite the orca_deps source to `type: archive`, which IS content-addressed
+# (checksummed by sha256). Identical deps => identical sha => cache hit.
+DEPS_TARBALL="$BUILD_DIR/deps_flatpak.tar.gz"
+echo -e "${YELLOW}Packing deterministic deps tarball (for cache-friendly orca_deps)...${NC}"
+# --sort/--mtime/--owner/--group/--numeric-owner + gzip -n => reproducible bytes.
+# Excludes mirror the manifest `skip:` (multi-GB host artifacts + .git).
+tar --sort=name --mtime='UTC 2020-01-01' --owner=0 --group=0 --numeric-owner \
+    --exclude='deps/build' \
+    --exclude='deps/build-*' \
+    --exclude='deps/build_flatpak' \
+    --exclude='deps/DL_CACHE' \
+    --exclude='deps/.git' \
+    --exclude='deps/AGENT_CODE_INFO.md' \
+    -cf - deps | gzip -n > "$DEPS_TARBALL"
+DEPS_TARBALL_ABS=$(readlink -f "$DEPS_TARBALL")
+DEPS_SHA256=$(sha256sum "$DEPS_TARBALL_ABS" | awk '{print $1}')
+echo -e "${GREEN}deps tarball: $DEPS_TARBALL ($(du -h "$DEPS_TARBALL_ABS" | cut -f1), sha256 ${DEPS_SHA256:0:12}…)${NC}"
+
+# Rewrite the orca_deps `type: dir` block (with optional skip:) -> `type: archive`.
+if ! python3 - "$MANIFEST" "$DEPS_TARBALL_ABS" "$DEPS_SHA256" <<'PYEOF'
+import re, sys
+manifest, tarball, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(manifest) as f:
+    text = f.read()
+pattern = re.compile(
+    r'^( *)- type: dir\n'
+    r'\1  path: \.\./\.\./deps\n'
+    r'\1  dest: deps\n'
+    r'(?:\1  skip:\n(?:\1    - .*\n)+)?',
+    re.MULTILINE,
+)
+replacement = (
+    r'\1- type: archive\n'
+    r'\1  path: ' + tarball + '\n'
+    r'\1  sha256: ' + sha + '\n'
+    r'\1  dest: deps\n'
+    r'\1  strip-components: 1\n'
+)
+new, n = pattern.subn(replacement, text)
+if n != 1:
+    sys.exit("expected exactly 1 orca_deps dir source, rewrote %d" % n)
+with open(manifest, 'w') as f:
+    f.write(new)
+PYEOF
+then
+    echo -e "${RED}Error: failed to rewrite orca_deps source to type: archive${NC}"
+    rm -f "$MANIFEST"
+    exit 1
+fi
+echo -e "${GREEN}orca_deps source rewritten to content-addressed archive (cache-friendly)${NC}"
 
 if ! flatpak-builder \
     "${BUILDER_ARGS[@]}" \
@@ -330,12 +408,12 @@ if ! flatpak-builder \
     "$MANIFEST"; then
     echo -e "${RED}Error: flatpak-builder failed${NC}"
     echo -e "${YELLOW}Check the build log above for details${NC}"
-    rm -f "scripts/flatpak/com.orcaslicer.OrcaSlicer.no-debug.yml"
+    rm -f "$MANIFEST"
     exit 1
 fi
 
-# Clean up temp manifest
-rm -f "scripts/flatpak/com.orcaslicer.OrcaSlicer.no-debug.yml"
+# Clean up generated manifest
+rm -f "$MANIFEST"
 
 # Create bundle
 echo -e "${YELLOW}Creating Flatpak bundle...${NC}"

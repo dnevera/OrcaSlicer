@@ -110,7 +110,7 @@ namespace Slic3r
         }
 
         // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrderUtils.cpp (commit 2f014ce1a)
-        // Clamp the edge cost to avoid int overflow in SPFA,
+        // H2C port: clamp the edge cost to avoid int overflow in SPFA,
         // which could otherwise produce an infinite loop.
         float val = matrix[l_nodes[idx_in_left]][r_nodes[idx_in_right]];
         return std::min(static_cast<int>(val), MaxFlowGraph::MCMF_MAX_EDGE_COST);

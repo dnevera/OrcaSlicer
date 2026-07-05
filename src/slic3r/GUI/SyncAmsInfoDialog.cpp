@@ -2358,7 +2358,8 @@ void SyncAmsInfoDialog::update_show_status()
             std::vector<wxString> params{error_message};
             params.emplace_back(_L("Tips: If you changed your nozzle of your printer lately, Please go to 'Device -> Printer parts' to change your nozzle setting."));
             show_status(PrintDialogStatus::PrintStatusNozzleMatchInvalid, params);
-            return;
+            // Orca: do not abort the sync/send flow on a nozzle flow-type mismatch; it is downgraded
+            // to a warning (matching add_h2c). The early return left the H2C sync window stuck.
         }
     }
 

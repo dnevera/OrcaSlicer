@@ -16,6 +16,9 @@ struct FilamentInfo;
 
 namespace MultiNozzleUtils {
 
+// Format a nozzle diameter (e.g. 0.4) to a trimmed string ("0.4").
+std::string format_diameter_to_str(double diameter);
+
 /**
  * @brief Represents information about a single physical nozzle.
  */

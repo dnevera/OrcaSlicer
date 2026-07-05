@@ -528,6 +528,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Widgets/ProgressBar.hpp
     GUI/Widgets/ProgressDialog.cpp
     GUI/Widgets/ProgressDialog.hpp
+    GUI/Widgets/MultiNozzleSync.cpp
+    GUI/Widgets/MultiNozzleSync.hpp
     GUI/Widgets/RadioBox.cpp
     GUI/Widgets/RadioBox.hpp
     GUI/Widgets/RadioGroup.cpp

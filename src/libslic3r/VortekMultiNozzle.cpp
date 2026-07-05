@@ -11,7 +11,7 @@ namespace Slic3r {
 namespace MultiNozzleUtils {
 
 // Helper to format nozzle diameter to string
-static std::string format_diameter_to_str(double diameter) {
+std::string format_diameter_to_str(double diameter) {
     char buf[64];
     sprintf(buf, "%.2f", diameter);
     std::string str(buf);

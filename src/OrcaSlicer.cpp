@@ -5934,6 +5934,17 @@ int CLI::run(int argc, char **argv)
                                     for (int index = 0; index < filament_maps.size(); index++)
                                     {
                                         int filament_extruder = filament_maps[index];
+                                        // Guard against an out-of-range manual filament_map value (e.g. a
+                                        // stale/edited 3mf mapping a filament to a non-existent extruder):
+                                        // unprintable_filament_ids is sized to the extruder count, so an
+                                        // out-of-range filament_extruder would index it out of bounds and
+                                        // crash. Fail with the standard mapping error instead.
+                                        if (filament_extruder < 1 || filament_extruder > (int)unprintable_filament_ids.size())
+                                        {
+                                            BOOST_LOG_TRIVIAL(error) << boost::format("filament %1% is mapped to extruder %2% which does not exist (extruder count %3%) under manual mode") % (index + 1) % filament_extruder % unprintable_filament_ids.size();
+                                            record_exit_reson(outfile_dir, CLI_FILAMENT_CAN_NOT_MAP, index + 1, cli_errors[CLI_FILAMENT_CAN_NOT_MAP], sliced_info);
+                                            flush_and_exit(CLI_FILAMENT_CAN_NOT_MAP);
+                                        }
                                         if (unprintable_filament_ids[filament_extruder - 1].find(index + 1) != unprintable_filament_ids[filament_extruder - 1].end())
                                         {
                                             BOOST_LOG_TRIVIAL(error) << boost::format("plate %1% : some filaments can not be mapped under manual mode for multi extruder printer ") % (index + 1);

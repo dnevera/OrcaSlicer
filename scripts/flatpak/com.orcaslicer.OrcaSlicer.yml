@@ -163,10 +163,22 @@ modules:
       - "*.la"
 
     sources:
-      # OrcaSlicer deps/ directory (avoids copying .git from worktree)
+      # OrcaSlicer deps/ directory (avoids copying .git from worktree).
+      # skip: keeps multi-GB host build artifacts out of the sandbox copy
+      # (deps/build ~6 GB, deps/build-dbginfo ~19 GB, DL_CACHE ~0.4 GB).
+      # NOTE: build_flatpak.sh rewrites this to a `type: archive` tarball at
+      # build time so orca_deps is content-addressed and actually cache-hits
+      # (flatpak-builder never caches `type: dir` sources). This dir source is
+      # the fallback used by clean builders such as Flathub.
       - type: dir
         path: ../../deps
         dest: deps
+        skip:
+          - build
+          - build-dbginfo
+          - build_flatpak
+          - DL_CACHE
+          - AGENT_CODE_INFO.md
 
       # ---------------------------------------------------------------
       # Pre-downloaded dependency archives

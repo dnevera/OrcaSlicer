@@ -65,6 +65,8 @@ enum PrintDialogStatus : unsigned int {
     PrintStatusNotSupportedPrintAll,
     PrintStatusBlankPlate,
     PrintStatusUnsupportedPrinter,
+    PrintStatusRackNozzleMappingWaiting, // H2C: waiting for printer auto nozzle-mapping (blocks send)
+    PrintStatusRackNozzleMappingError,   // H2C: auto nozzle-mapping failed (blocks send)
     PrintStatusPrinterErrorEnd,
 
     // Errors for filament, Block Print
@@ -89,6 +91,7 @@ enum PrintDialogStatus : unsigned int {
     PrintStatusTimelapseWarning,
     PrintStatusMixAmsAndVtSlotWarning,
     PrintStatusToolHeadCoolingFanWarning,
+    PrintStatusRackNozzleMappingWarning, // H2C: nozzle-mapping produces extra waste (non-blocking)
     PrintStatusPrinterWarningEnd,
 
     // Warnings for filament

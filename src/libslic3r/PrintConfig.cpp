@@ -570,7 +570,9 @@ CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ExtruderType)
 
 static const t_config_enum_values s_keys_map_NozzleVolumeType = {
     { "Standard",  nvtStandard },
-    { "High Flow", nvtHighFlow }
+    { "High Flow", nvtHighFlow },
+    { "Hybrid", nvtHybrid },
+    { "TPU High Flow", nvtTPUHighFlow }
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(NozzleVolumeType)
 
@@ -642,6 +644,29 @@ std::vector<std::map<int, int>> get_extruder_ams_count(const std::vector<std::st
         extruder_ams_counts.emplace_back(ams_count_info);
     }
     return extruder_ams_counts;
+}
+
+std::vector<std::map<NozzleVolumeType,int>> get_extruder_nozzle_stats(const std::vector<std::string>& strs)
+{
+    std::vector<std::map<NozzleVolumeType,int>> extruder_nozzle_counts;
+    for (const std::string& str : strs) {
+        std::map<NozzleVolumeType,int> nozzle_count_map;
+        if(str.empty()){
+            extruder_nozzle_counts.emplace_back(nozzle_count_map);
+            continue;
+        }
+        std::vector<std::string> nozzle_infos;
+        boost::algorithm::split(nozzle_infos, str, boost::is_any_of("|"));
+        for (auto& nozzle_info : nozzle_infos) {
+            std::vector<std::string> attr;
+            boost::algorithm::split(attr, nozzle_info, boost::is_any_of("#"));
+            NozzleVolumeType volume_type = NozzleVolumeType(s_keys_map_NozzleVolumeType.at(attr[0]));
+            int nozzle_count = std::atoi(attr[1].c_str());
+            nozzle_count_map[volume_type] = nozzle_count;
+        }
+        extruder_nozzle_counts.emplace_back(nozzle_count_map);
+    }
+    return extruder_nozzle_counts;
 }
 
 std::vector<std::string> save_extruder_ams_count_to_string(const std::vector<std::map<int, int>> &extruder_ams_count)
@@ -5422,8 +5447,10 @@ void PrintConfigDef::init_fff_params()
     def->enum_keys_map = &ConfigOptionEnum<NozzleVolumeType>::get_enum_values();
     def->enum_values.push_back(L("Standard"));
     def->enum_values.push_back(L("High Flow"));
+    def->enum_values.push_back("Hybrid");
     def->enum_labels.push_back(L("Standard"));
     def->enum_labels.push_back(L("High Flow"));
+    def->enum_labels.push_back(L("Hybrid"));
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionEnumsGeneric{ NozzleVolumeType::nvtStandard });
 
@@ -5434,8 +5461,10 @@ void PrintConfigDef::init_fff_params()
     def->enum_keys_map = &ConfigOptionEnum<NozzleVolumeType>::get_enum_values();
     def->enum_values.push_back(L("Standard"));
     def->enum_values.push_back(L("High Flow"));
+    def->enum_values.push_back(L("Hybrid"));
     def->enum_labels.push_back(L("Standard"));
     def->enum_labels.push_back(L("High Flow"));
+    def->enum_labels.push_back(L("Hybrid"));
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionEnumsGeneric{ NozzleVolumeType::nvtStandard });
 
@@ -9101,6 +9130,9 @@ int DynamicPrintConfig::get_index_for_extruder(int extruder_or_filament_id, std:
     if (variant_opt != nullptr) {
         int v_size = variant_opt->values.size();
         const bool has_complete_id_map = id_opt && int(id_opt->values.size()) >= v_size;
+        // nvtHybrid not supported in presets, switch to nvtStandard to match the preset values
+        if (nozzle_volume_type == nvtHybrid)
+            nozzle_volume_type = nvtStandard;
         std::string extruder_variant = get_extruder_variant_string(extruder_type, nozzle_volume_type);
         for (int index = 0; index < v_size; index++)
         {
@@ -9877,13 +9909,48 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
     return {};
 }
 
+int DynamicPrintConfig::get_extruder_nozzle_volume_count(int extruder_count, std::vector<std::vector<NozzleVolumeType>>& nozzle_volume_types) const
+{
+    int count = extruder_count;
+    auto opt_extruder_nozzle_count = dynamic_cast<const ConfigOptionStrings*>(this->option("extruder_nozzle_stats"));
+    nozzle_volume_types.resize(extruder_count, std::vector<NozzleVolumeType>{});
+    if (opt_extruder_nozzle_count && (opt_extruder_nozzle_count->values.size() == extruder_count)) {
+        std::vector<std::string> extruder_nozzle_count_strs = opt_extruder_nozzle_count->values;
+        std::vector<std::map<NozzleVolumeType,int>> extruder_nozzle_counts;
+
+        extruder_nozzle_counts = get_extruder_nozzle_stats(extruder_nozzle_count_strs);
+        count = 0;
+        for (int i = 0; i < extruder_count;  i++)
+        {
+            count += extruder_nozzle_counts[i].size();
+            for (auto& iter: extruder_nozzle_counts[i])
+                nozzle_volume_types[i].push_back(iter.first);
+        }
+    }
+    return count;
+}
+
+// Orca H2C port: 4-arg wrapper kept for the existing call sites.
+// Computes extruder_count + nozzle_volume_count locally and delegates to the 6-arg variant.
 void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filaments(DynamicPrintConfig& printer_config, std::set<std::string>& key_set, std::string id_name, std::string variant_name)
 {
-    int extruder_count;
-    bool different_extruder = printer_config.support_different_extruders(extruder_count);
-    if ((extruder_count > 1) || different_extruder)
+    int extruder_count = 1;
+    printer_config.support_different_extruders(extruder_count);
+    std::vector<std::vector<NozzleVolumeType>> nv_types;
+    int extruder_nozzle_volume_count = printer_config.get_extruder_nozzle_volume_count(extruder_count, nv_types);
+    this->update_values_to_printer_extruders_for_multiple_filaments(printer_config, extruder_count, extruder_nozzle_volume_count, key_set, id_name, variant_name);
+}
+
+void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filaments(DynamicPrintConfig& printer_config, int extruder_count, int extruder_nozzle_volume_count, std::set<std::string>& key_set, std::string id_name, std::string variant_name)
+{
+    //int extruder_count, extruder_volume_type_count;
+    //bool different_extruder = printer_config.support_different_extruders(extruder_count);
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: extruder_count %2%, extruder_nozzle_volume_count %3%")%__LINE__ %extruder_count %extruder_nozzle_volume_count;
+
+    //if (extruder_nozzle_volume_count > 1)
     {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%:  extruder_count=%2%, different_extruder=%3%")%__LINE__ %extruder_count %different_extruder;
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", Line %1%: different nozzle volume processing, extruder_count=%2%")%__LINE__ %extruder_count;
         auto opt_filament_map = printer_config.option<ConfigOptionInts>("filament_map");
         if (!opt_filament_map) {
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: filament_map option not found, skipping")%__LINE__;
@@ -9900,6 +9967,11 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: extruder_type or nozzle_volume_type option not found, skipping")%__LINE__;
             return;
         }
+
+        auto opt_filament_volume_maps = dynamic_cast<const ConfigOptionInts*>(printer_config.option("filament_volume_map"));
+        std::vector<int> filament_volume_maps;
+        if (opt_filament_volume_maps)
+            filament_volume_maps = opt_filament_volume_maps->values;
         auto opt_ids = id_name.empty()? nullptr: dynamic_cast<const ConfigOptionInts*>(this->option(id_name));
         std::vector<int> variant_index;
 
@@ -9909,6 +9981,10 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
         {
             ExtruderType extruder_type = (ExtruderType)(opt_extruder_type->get_at(filament_maps[f_index] - 1));
             NozzleVolumeType nozzle_volume_type = (NozzleVolumeType)(opt_nozzle_volume_type->get_at(filament_maps[f_index] - 1));
+
+            if ((extruder_nozzle_volume_count > extruder_count)&&(!filament_volume_maps.empty())) {
+                nozzle_volume_type = (NozzleVolumeType)(filament_volume_maps[f_index]);
+            }
 
             //variant index
             variant_index[f_index] = get_index_for_extruder(f_index+1, id_name, extruder_type, nozzle_volume_type, variant_name);
@@ -9955,11 +10031,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9976,11 +10050,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -9997,11 +10069,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10018,11 +10088,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10039,11 +10107,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10060,11 +10126,9 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
@@ -10081,17 +10145,19 @@ void DynamicPrintConfig::update_values_to_printer_extruders_for_multiple_filamen
                     new_values.resize(filament_count);
                     for (int f_index = 0; f_index < filament_count; f_index++)
                     {
-                        if (variant_index[f_index] < 0 || static_cast<size_t>(variant_index[f_index]) >= opt->size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: option %2% variant index %3% out of range, skipping")%__LINE__%key%variant_index[f_index];
-                            continue;
-                        }
-                        new_values[f_index] = opt->get_at(variant_index[f_index]);
+                        int vi = variant_index[f_index];
+                        if (vi < 0) vi = 0;
+                        new_values[f_index] = opt->get_at(vi);
                     }
                     opt->values = new_values;
                     break;
                 }
                 default:
-                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: unsupported option type for %2%")%__LINE__%key;
+                    // Scalar option types (coFloat/coFloatOrPercent/coInt/coBool/...) have no
+                    // per-extruder-variant array to slice, so there is nothing to remap here.
+                    // This is expected for the scalar print options listed in
+                    // print_options_with_variant, so keep it at debug level to avoid log spam.
+                    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(", Line %1%: non per-variant (scalar) option, skipping remap for %2%")%__LINE__%key;
                     break;
             }
         }

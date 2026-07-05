@@ -8,4 +8,15 @@ grep -q org.freedesktop.Platform.GL.nvidia /.flatpak-info && export WEBKIT_DISAB
 # while preserving the user's language/locale for translations.
 export LC_NUMERIC=C
 
+# Share config with the host (and the AppImage build) by symlinking the per-app
+# config dir inside the sandbox to ~/.config/OrcaSlicer on the host. OrcaSlicer
+# computes its data_dir as ${XDG_CONFIG_HOME}/OrcaSlicer (GUI_App.cpp), which the
+# runtime sets to ~/.var/app/com.orcaslicer.OrcaSlicer/config inside the sandbox.
+# --filesystem=home makes the host target writable. Mirrors the BambuStudio
+# flatpak wrapper setup.
+mkdir -p "${HOME}/.config/OrcaSlicer"
+mkdir -p "${XDG_CONFIG_HOME:-${HOME}/.var/app/com.orcaslicer.OrcaSlicer/config}"
+ln -sfn "${HOME}/.config/OrcaSlicer" \
+    "${XDG_CONFIG_HOME:-${HOME}/.var/app/com.orcaslicer.OrcaSlicer/config}/OrcaSlicer"
+
 exec /app/bin/orca-slicer "$@"

@@ -762,7 +762,7 @@ void PreCooling::inject_cooling_heating_command(
     VORTEK_LOG(warning, "[DBG] real_cooling_time=" << real_cooling_time << " real_delta_temp=" << real_delta_temp);
     if (real_delta_temp == 0)
         return;
-    int cooling_temp = std::max((int)room_temperature, (int)curr_temp - real_delta_temp);
+    int cooling_temp = std::max((int)reuse_cool_floor, (int)curr_temp - real_delta_temp);
     if (!suppress_cooling_emission) {
         // Reference to BBS: cooldown injected at partial_free_lower_id (BEFORE TC), not AT TC line.
         unsigned int cooldown_id = (block.partial_free_lower_id < block.free_lower_gcode_id)
