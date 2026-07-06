@@ -344,6 +344,7 @@ void FilamentMapDialog::update_panel_status(PageType page)
     }
     if (page == PageType::ptManual) {
         m_manual_btn->Select(true);
+        m_manual_map_panel->UpdateNozzleVolumeType();
         m_manual_map_panel->Show();
     }
     if (page == PageType::ptAuto) {

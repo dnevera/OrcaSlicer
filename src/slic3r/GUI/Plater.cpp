@@ -3,6 +3,7 @@
 #include "libslic3r/VortekPlateMapping.hpp"
 #include "slic3r/GUI/DeviceCore/VortekDeviceHooks.hpp"
 #include "libslic3r/VortekPrintHooks.hpp"
+#include "libslic3r/VortekLog.hpp"
 #include "VortekPurgeModeDialog.hpp"
 #include "libslic3r_version.h"
 
@@ -1178,9 +1179,14 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
     combo_flow->GetDropDown().SetUseContentWidth(true);
     combo_flow->Bind(wxEVT_COMBOBOX, [this, index, combo_flow](wxCommandEvent &evt) {
         auto printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER));
-        printer_tab->set_extruder_volume_type(index, NozzleVolumeType(intptr_t(combo_flow->GetClientData(evt.GetInt()))));
-        if (GUI::wxGetApp().plater())
+        NozzleVolumeType volume_type = NozzleVolumeType(intptr_t(combo_flow->GetClientData(evt.GetInt())));
+        printer_tab->set_extruder_volume_type(index, volume_type);
+        if (GUI::wxGetApp().plater()) {
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map hook
+            // Vortek Hook: update filament volume maps for hybrid nozzles
+            Vortek::DeviceHooks::update_filament_volume_map(GUI::wxGetApp().plater(), index, static_cast<int>(volume_type));
             GUI::wxGetApp().plater()->update_machine_sync_status();
+        }
     });
     this->combo_flow = combo_flow;
 
@@ -18474,6 +18480,17 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
         auto opt_vm = project_config.option<ConfigOptionInts>("filament_volume_map");
         if (opt_vm) {
             filament_volume_map = opt_vm->values;
+        }
+    }
+
+    {
+        auto opt_nvt = project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+        if (opt_nvt) {
+            std::string vals;
+            for (auto v : opt_nvt->values) vals += std::to_string(v) + " ";
+            VORTEK_LOG(warn, "Plater::open_filament_map_setting_dialog: project_config nozzle_volume_type values: " << vals);
+        } else {
+            VORTEK_LOG(warn, "Plater::open_filament_map_setting_dialog: project_config nozzle_volume_type option is missing!");
         }
     }
 

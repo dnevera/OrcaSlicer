@@ -406,12 +406,15 @@ void SeparatedDragDropPanel::UpdateLayout()
         m_high_flow_panel->Show();
         m_standard_panel->Show();
 
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/DragDropPanel.cpp:420-425
+        // H2C: Set fallback minimum width if parent window size is not yet calculated.
         wxSize content_size = m_content_panel->GetSize();
         int panel_width = (content_size.GetWidth() - FromDIP(1) - FromDIP(8)) / 2;
-        if (panel_width > 0) {
-            m_high_flow_panel->SetMinSize(wxSize(panel_width, -1));
-            m_standard_panel->SetMinSize(wxSize(panel_width, -1));
+        if (panel_width <= 0) {
+            panel_width = (FromDIP(260) - FromDIP(1) - FromDIP(8)) / 2;
         }
+        m_high_flow_panel->SetMinSize(wxSize(panel_width, -1));
+        m_standard_panel->SetMinSize(wxSize(panel_width, -1));
 
         m_content_sizer->Add(m_high_flow_panel, 1, wxEXPAND | wxLEFT, FromDIP(8));
 

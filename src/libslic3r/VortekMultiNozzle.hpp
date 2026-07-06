@@ -251,10 +251,26 @@ public:
 
     void set_nozzle_data_flag(NozzleDataFlag flag){ data_flag = flag; }
     void set_force_keep_flag(bool flag) { force_keep_stat = flag; }
+
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.hpp: ExtruderNozzleStat overrides
+    void set_user_override(int extruder_id, bool override) {
+        if (override) {
+            m_user_overrides.insert(extruder_id);
+        } else {
+            m_user_overrides.erase(extruder_id);
+        }
+    }
+    bool get_user_override(int extruder_id) const {
+        return m_user_overrides.count(extruder_id) > 0;
+    }
+    void clear_user_overrides() {
+        m_user_overrides.clear();
+    }
 private:
     bool force_keep_stat{ false };
     std::vector<std::map<NozzleVolumeType,int>> extruder_nozzle_counts;
     NozzleDataFlag data_flag{ ndfNone };
+    std::set<int> m_user_overrides;
 };
 
 std::vector<std::string> save_extruder_nozzle_stats_to_string(const std::vector<std::map<NozzleVolumeType,int>>& extruder_nozzle_stats);

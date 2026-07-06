@@ -1,6 +1,7 @@
 #include "FilamentMapPanel.hpp"
 #include "GUI_App.hpp"
 #include <libslic3r/PrintConfig.hpp>
+#include <libslic3r/VortekPrintHooks.hpp>
 #include <wx/dcbuffer.h>
 #include <wx/utils.h>
 #include "wx/graphics.h"
@@ -43,14 +44,21 @@ FilamentMapManualPanel::FilamentMapManualPanel(wxWindow                       *p
     // H2C: Build Left panel title with nozzle count like BBS.
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleCountDisplay
     auto* preset_bundle = wxGetApp().preset_bundle;
-    int left_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(0);
-    wxString left_label = wxString::Format(_L("Left Extruder(%d)"), left_count);
+    bool is_h2c = preset_bundle && Vortek::is_h2c_printer(preset_bundle);
+
+    wxString left_label;
+    if (is_h2c) {
+        int left_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(0);
+        left_label = wxString::Format(_L("Left Extruder(%d)"), left_count);
+    } else {
+        left_label = _L("Left Extruder");
+    }
     m_left_panel  = new DragDropPanel(this, left_label, false);
 
     // H2C: Detect Hybrid mode from nozzle_volume_type to enable HF/Standard separation.
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – SeparatedDragDropPanel usage
     bool is_hybrid = false;
-    {
+    if (is_h2c) {
         auto opt_nvt = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
         if (opt_nvt && opt_nvt->values.size() > 1) {
             is_hybrid = (opt_nvt->values[1] == static_cast<int>(Slic3r::nvtHybrid));
@@ -60,17 +68,26 @@ FilamentMapManualPanel::FilamentMapManualPanel(wxWindow                       *p
     // H2C: Build Right panel title with nozzle counts from extruder_nozzle_stat.
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleCountDisplay
     wxString right_label;
-    if (is_hybrid) {
-        int standard_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtStandard);
-        int highflow_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtHighFlow);
-        right_label = wxString::Format(_L("Right Extruder(Std: %d, HF: %d)"), standard_count, highflow_count);
+    if (is_h2c) {
+        if (is_hybrid) {
+            int standard_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtStandard);
+            int highflow_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtHighFlow);
+            right_label = wxString::Format(_L("Right Extruder(Std: %d, HF: %d)"), standard_count, highflow_count);
+        } else {
+            int right_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1);
+            right_label = wxString::Format(_L("Right Extruder(%d)"), right_count);
+        }
     } else {
-        int right_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1);
-        right_label = wxString::Format(_L("Right Extruder(%d)"), right_count);
+        right_label = _L("Right Extruder");
     }
 
-    m_right_panel = new SeparatedDragDropPanel(this, right_label, is_hybrid);
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp:273
+    m_right_panel = new SeparatedDragDropPanel(this, right_label, false);
     m_switch_btn  = new ScalableButton(this, wxID_ANY, "switch_filament_maps");
+
+    if (is_h2c) {
+        UpdateNozzleVolumeType();
+    }
 
     for (size_t idx = 0; idx < m_filament_map.size(); ++idx) {
         auto iter = std::find(m_filament_list.begin(), m_filament_list.end(), idx + 1);
@@ -163,6 +180,58 @@ void FilamentMapManualPanel::Show()
     m_right_panel->Show();
     m_switch_btn->Show();
     wxPanel::Show();
+}
+
+// H2C Vortek hook: Update nozzle volume type and layout for Hybrid extruder
+// Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleVolumeType
+void FilamentMapManualPanel::UpdateNozzleVolumeType()
+{
+    auto* preset_bundle = wxGetApp().preset_bundle;
+    if (!preset_bundle || !Vortek::is_h2c_printer(preset_bundle)) {
+        if (m_right_panel) {
+            m_right_panel->SetUseSeparation(false);
+        }
+        return;
+    }
+
+    bool is_hybrid = false;
+    auto opt_nvt = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    if (opt_nvt && opt_nvt->values.size() > 1) {
+        is_hybrid = (opt_nvt->values[1] == static_cast<int>(Slic3r::nvtHybrid));
+    }
+
+    if (m_right_panel) {
+        m_right_panel->SetUseSeparation(is_hybrid);
+        UpdateNozzleCountDisplay();
+    }
+}
+
+// H2C Vortek hook: Update nozzle count display labels on the panels
+// Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapPanel.cpp – UpdateNozzleCountDisplay
+void FilamentMapManualPanel::UpdateNozzleCountDisplay()
+{
+    auto* preset_bundle = wxGetApp().preset_bundle;
+    if (!preset_bundle || !Vortek::is_h2c_printer(preset_bundle)) return;
+
+    int left_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(0);
+    m_left_panel->UpdateLabel(wxString::Format(_L("Left Extruder(%d)"), left_count));
+
+    bool is_hybrid = false;
+    auto opt_nvt = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    if (opt_nvt && opt_nvt->values.size() > 1) {
+        is_hybrid = (opt_nvt->values[1] == static_cast<int>(Slic3r::nvtHybrid));
+    }
+
+    wxString right_label;
+    if (is_hybrid) {
+        int standard_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtStandard);
+        int highflow_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, Slic3r::nvtHighFlow);
+        right_label = wxString::Format(_L("Right Extruder(Std: %d, HF: %d)"), standard_count, highflow_count);
+    } else {
+        int right_count = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1);
+        right_label = wxString::Format(_L("Right Extruder(%d)"), right_count);
+    }
+    m_right_panel->UpdateLabel(right_label);
 }
 
 GUI::FilamentMapBtnPanel::FilamentMapBtnPanel(wxWindow *parent, const wxString &label, const wxString &detail, const std::string &icon) : wxPanel(parent)

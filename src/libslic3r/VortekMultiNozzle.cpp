@@ -519,7 +519,9 @@ int ExtruderNozzleStat::get_extruder_nozzle_count(int extruder_id, std::optional
 {
     if(extruder_id < 0 || extruder_id >= extruder_nozzle_counts.size())
         return 0;
-    if (!volume_type.has_value())
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:291
+    // nvtHybrid is a layout marker; return the sum of all physical nozzle counts in the carousel.
+    if (!volume_type.has_value() || volume_type == NozzleVolumeType::nvtHybrid)
         return std::accumulate(extruder_nozzle_counts[extruder_id].begin(), extruder_nozzle_counts[extruder_id].end(), 0,
             [](int sum, const std::pair<NozzleVolumeType, int>& p) { return sum + p.second; });
 
@@ -610,7 +612,8 @@ void ExtruderNozzleStat::on_volume_type_switch(int extruder_id, NozzleVolumeType
     if (data_flag == NozzleDataFlag::ndfMachine) {
         // do nothing here
     }
-    else {
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp: ExtruderNozzleStat::on_volume_type_switch
+    else if (type != nvtHybrid) {
         int current_count = get_extruder_nozzle_count(extruder_id, std::nullopt);
         if (extruder_id >= extruder_nozzle_counts.size()) {
             extruder_nozzle_counts.resize(extruder_id + 1);

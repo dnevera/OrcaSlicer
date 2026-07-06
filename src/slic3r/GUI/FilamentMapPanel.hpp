@@ -31,6 +31,8 @@ public:
 
     void Hide();
     void Show();
+    void UpdateNozzleVolumeType();
+    void UpdateNozzleCountDisplay();
 
 private:
     void           OnSwitchFilament(wxCommandEvent &);

@@ -29,6 +29,7 @@ class VortekFilaSwitch;
 class DevFilaSystem;
 namespace GUI {
 class PartPlate;
+class Plater;
 }
 }
 
@@ -233,6 +234,16 @@ bool parse_hybrid_extruder_selection(
     const std::vector<int>&         volume_values,
     int&                            out_extruder_id,
     Slic3r::NozzleVolumeType&       out_nozzle_type);
+
+// H2C Vortek hooks for synchronizing nozzle flow types and volume maps
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map
+void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, int volume_type);
+
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: set_extruder_volume_type
+void on_extruder_volume_type_changed(Slic3r::PresetBundle* preset_bundle, int extruder_id, Slic3r::NozzleVolumeType type);
+
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: select_preset
+void sync_extruder_nozzle_stats_on_preset_select(Slic3r::PresetBundle* preset_bundle, const std::string& base_preset_name);
 
 } // namespace DeviceHooks
 } // namespace Vortek
