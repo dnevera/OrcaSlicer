@@ -191,6 +191,13 @@ public:
         const Slic3r::DynamicPrintConfig& new_full_config);
 
     /**
+     * @brief Applies filament overrides to machine configuration retract options.
+     */
+    static void apply_filament_retract_overrides(
+        Slic3r::DynamicPrintConfig& new_full_config,
+        const std::vector<int>& filament_maps);
+
+    /**
      * @brief Checks if two printer models are compatible (with fallback mapping like O1C <-> O1C2).
      * 
      * @param model1 First printer model name

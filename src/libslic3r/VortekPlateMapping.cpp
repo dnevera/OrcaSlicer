@@ -523,4 +523,31 @@ void PlateMapping::diag_log_config_diffs(
     }
 }
 
+void PlateMapping::apply_filament_retract_overrides(
+    Slic3r::DynamicPrintConfig& new_full_config,
+    const std::vector<int>& filament_maps
+)
+{
+    // Rule: Vortek hooks are isolated to H2C printers only
+    if (!is_h2c_printer(new_full_config) || filament_maps.empty()) {
+        return;
+    }
+
+    // Copy to non-const vector because Slic3r's apply_override signature requires std::vector<int>&
+    std::vector<int> default_maps = filament_maps;
+
+    const std::vector<std::string> &extruder_retract_keys = Slic3r::print_config_def.extruder_retract_keys();
+    const std::string               filament_prefix       = "filament_";
+    for (const auto &opt_key : extruder_retract_keys) {
+        Slic3r::ConfigOption *opt_new_machine  = new_full_config.option(opt_key);
+        const Slic3r::ConfigOption *opt_new_filament = new_full_config.option(filament_prefix + opt_key);
+        if (opt_new_machine && opt_new_filament) {
+            const auto* new_fil_vec = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(opt_new_filament);
+            if (new_fil_vec && default_maps.size() == new_fil_vec->size()) {
+                opt_new_machine->apply_override(opt_new_filament, default_maps);
+            }
+        }
+    }
+}
+
 } // namespace Vortek
