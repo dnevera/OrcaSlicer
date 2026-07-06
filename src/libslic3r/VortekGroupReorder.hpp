@@ -55,10 +55,7 @@ static bool handle_nozzle_manual_reorder(
         Slic3r::Print* print,
         const std::vector<int>& filament_maps);
 
-    // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
-    static void handle_auto_mode_reorder(
-        Slic3r::Print* print,
-        const std::vector<int>& filament_maps);
+
 
     // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
     static bool ensure_nozzle_group_result(

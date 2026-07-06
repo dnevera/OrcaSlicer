@@ -66,14 +66,7 @@ public:
      */
     static void clear_mappings(Slic3r::DynamicPrintConfig* config);
 
-    /**
-     * @brief Loads custom nozzle mappings from the 3MF PlateData config.
-     */
-    static LoadMappingResult load_from_3mf_structure(
-        const Slic3r::PlateData* plate_data,
-        int filament_count,
-        Slic3r::GCodeProcessorResult* gcode_result
-    );
+
 
     /**
      * @brief Ensures loaded project configs have matching nozzle/volume map dimensions.
@@ -90,10 +83,7 @@ public:
      */
     static std::vector<int> get_volume_map_for_export(const Slic3r::Print* print, const Slic3r::DynamicPrintConfig& plate_config);
 
-    /**
-     * @brief Patches config for exporting metadata.
-     */
-    static void patch_export_config(Slic3r::DynamicPrintConfig& cfg);
+
 
     /**
      * @brief Sets group_id in slice_filaments_info from filament_nozzle_map after parse_filament_info.
@@ -122,35 +112,13 @@ public:
         const Slic3r::Print* print = nullptr
     );
 
-    /**
-     * @brief Resolves differences when applying nozzle configurations to avoid false invalidations.
-     */
-    static void handle_h2c_mapping_apply(
-        Slic3r::Print* print,
-        Slic3r::DynamicPrintConfig& new_full_config,
-        const Slic3r::DynamicPrintConfig& old_full_config
-    );
 
-    /**
-     * @brief Filter/suppress H2C specific keys from invalidating print steps if they haven't changed.
-     */
-    static void handle_h2c_print_diff(
-        Slic3r::Print* print,
-        Slic3r::PrintConfig& config,
-        Slic3r::DynamicPrintConfig& full_print_config,
-        const Slic3r::DynamicPrintConfig& new_full_config,
-        std::unordered_set<std::string>& print_diff_set
-    );
 
-    /**
-     * @brief Serializes variant overrides to string.
-     */
-    static bool get_variant_override_serialized(const Slic3r::ConfigBase* config, const std::string& opt_key, std::string& out_serialized);
 
-    /**
-     * @brief Retrives list of variant override values.
-     */
-    static bool get_variant_override_values(const Slic3r::ConfigBase* config, const std::string& opt_key, std::vector<std::string>& out_values);
+
+
+
+
 
     /**
      * @brief Filters variant-transformed keys from full_config_diff to prevent false re-slicing.

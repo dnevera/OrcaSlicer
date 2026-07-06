@@ -812,27 +812,6 @@ void PreCooling::inject_cooling_heating_command(
     }
 }
 
-void PreCooling::inject_cooling_heating_command_bbs(
-    InsertedLinesMap& inserted_operation_lines,
-    const ExtruderFreeBlock& block,
-    float curr_temp,
-    float target_temp,
-    bool pre_cooling,
-    bool pre_heating
-)
-{
-}
-
-void PreCooling::inject_cooling_heating_command_orca(
-    InsertedLinesMap& inserted_operation_lines,
-    const ExtruderFreeBlock& block,
-    float curr_temp,
-    float target_temp,
-    bool pre_cooling,
-    bool pre_heating
-)
-{
-}
 
 PreCooling::InsertedLinesMap PreCooling::run_pre_scan(Slic3r::GCodeProcessor& processor, const std::string& filename)
 {

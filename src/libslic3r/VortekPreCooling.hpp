@@ -188,23 +188,7 @@ private:
         bool suppress_cooling_emission = false
     );
 
-    void inject_cooling_heating_command_bbs(
-        InsertedLinesMap& inserted_operation_lines,
-        const ExtruderFreeBlock& block,
-        float curr_temp,
-        float target_temp,
-        bool pre_cooling,
-        bool pre_heating
-    );
 
-    void inject_cooling_heating_command_orca(
-        InsertedLinesMap& inserted_operation_lines,
-        const ExtruderFreeBlock& block,
-        float curr_temp,
-        float target_temp,
-        bool pre_cooling,
-        bool pre_heating
-    );
     
     void build_by_filament_blocks(const std::vector<FilamentUsageBlock>& filament_usage_blocks);
     void build_by_extruder_blocks(const std::vector<ExtruderUsageBlock>& extruder_usage_blocks);

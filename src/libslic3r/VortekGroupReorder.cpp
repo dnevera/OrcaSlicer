@@ -176,16 +176,7 @@ bool GroupReorder::ensure_nozzle_group_result(
     }
 }
 
-// Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
-void GroupReorder::handle_auto_mode_reorder(
-    Slic3r::Print* print,
-    const std::vector<int>& filament_maps)
-{
-    if (!print || !is_h2c_printer(*print)) return;
 
-    VORTEK_LOG(warn, "handle_auto_mode_reorder: initializing nozzle_group_result for auto mode");
-    ensure_nozzle_group_result(print, print->full_print_config(), filament_maps, print->config().filament_map_mode.value);
-}
 
 // Reference to BBS: BambuStudio PR#1 / commit 284ae6e2a5 — ToolOrdering.cpp sort_and_build_data fmmManual branch
 void GroupReorder::handle_manual_mode_reorder(

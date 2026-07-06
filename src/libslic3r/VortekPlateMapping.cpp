@@ -125,33 +125,7 @@ void PlateMapping::clear_mappings(Slic3r::DynamicPrintConfig* config)
     }
 }
 
-LoadMappingResult PlateMapping::load_from_3mf_structure(
-    const Slic3r::PlateData* plate_data,
-    int filament_count,
-    Slic3r::GCodeProcessorResult* gcode_result
-)
-{
-    LoadMappingResult res;
-    if (!plate_data) return res;
-    if (!is_h2c_printer(plate_data->config)) return res;
 
-    VORTEK_LOG(warn, "load_from_3mf_structure: loading nozzle mappings");
-
-    if (plate_data->config.has("filament_nozzle_map")) {
-        res.filament_nozzle_map = plate_data->config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
-    }
-    if (plate_data->config.has("filament_volume_map")) {
-        res.filament_volume_map = plate_data->config.option<Slic3r::ConfigOptionInts>("filament_volume_map")->values;
-    }
-
-    if (res.filament_nozzle_map.size() != filament_count) {
-        res.filament_nozzle_map.resize(filament_count, 1);
-    }
-    if (res.filament_volume_map.size() != filament_count) {
-        res.filament_volume_map.resize(filament_count, 1);
-    }
-    return res;
-}
 
 void PlateMapping::sync_project_config_on_load(Slic3r::DynamicConfig& proj_cfg, int filament_count)
 {
@@ -177,15 +151,7 @@ void PlateMapping::sync_project_config_on_load(Slic3r::DynamicConfig& proj_cfg, 
     }
 }
 
-void PlateMapping::patch_export_config(Slic3r::DynamicPrintConfig& cfg)
-{
-    if (!cfg.has("filament_nozzle_map")) {
-        cfg.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts({0}));
-    }
-    if (!cfg.has("filament_volume_map")) {
-        cfg.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts({1}));
-    }
-}
+
 
 void PlateMapping::patch_slice_filament_nozzle_groups(
     Slic3r::PlateData* plate_data,
@@ -299,56 +265,13 @@ void PlateMapping::patch_plate_data_for_export(
     plate_data->config.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
 }
 
-void PlateMapping::handle_h2c_mapping_apply(
-    Slic3r::Print* print,
-    Slic3r::DynamicPrintConfig& new_full_config,
-    const Slic3r::DynamicPrintConfig& old_full_config
-)
-{
-    if (new_full_config.has("filament_nozzle_map") && old_full_config.has("filament_nozzle_map")) {
-        auto new_nozzle = new_full_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
-        auto old_nozzle = old_full_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
-        if (new_nozzle != old_nozzle) {
-            VORTEK_LOG(warn, "handle_h2c_mapping_apply: synchronizing config update");
-        }
-    }
-}
 
-void PlateMapping::handle_h2c_print_diff(
-    Slic3r::Print* print,
-    Slic3r::PrintConfig& config,
-    Slic3r::DynamicPrintConfig& full_print_config,
-    const Slic3r::DynamicPrintConfig& new_full_config,
-    std::unordered_set<std::string>& print_diff_set
-)
-{
-    VORTEK_LOG(debug, "handle_h2c_print_diff: checking " << print_diff_set.size() << " changed options");
-    std::vector<std::string> keys_to_remove;
-    for (const auto& key : print_diff_set) {
-        // Suppress invalidation for dynamic override parameters
-        if (key == "nozzle_diameter" || key == "retraction_length" || key == "z_hop" || key == "retraction_speed" || key == "deretraction_speed") {
-            keys_to_remove.push_back(key);
-        }
-    }
-    for (const auto& key : keys_to_remove) {
-        print_diff_set.erase(key);
-        VORTEK_LOG(debug, "suppressed false invalidation for key: " << key);
-    }
-}
 
-bool PlateMapping::get_variant_override_serialized(const Slic3r::ConfigBase* config, const std::string& opt_key, std::string& out_serialized)
-{
-    if (!config || !config->has(opt_key)) return false;
-    out_serialized = config->option(opt_key)->serialize();
-    return true;
-}
 
-bool PlateMapping::get_variant_override_values(const Slic3r::ConfigBase* config, const std::string& opt_key, std::vector<std::string>& out_values)
-{
-    if (!config || !config->has(opt_key)) return false;
-    out_values = { config->option(opt_key)->serialize() };
-    return true;
-}
+
+
+
+
 
 bool PlateMapping::are_models_compatible(const std::string& model1, const std::string& model2)
 {

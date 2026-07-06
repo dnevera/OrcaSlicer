@@ -28,11 +28,7 @@ struct NozzleInfo {
     int              extruder_id{-1};   ///< 0-based logical extruder ID (T0 or T1)
     int              group_id{-1};      ///< Logical nozzle changer slot ID
 
-    /**
-     * @brief Serializes the nozzle information to a string representation.
-     * @return Serialized string.
-     */
-    std::string serialize() const;
+
 
     bool operator<(const NozzleInfo& other) const {
         if (group_id != other.group_id) return group_id < other.group_id;
@@ -70,18 +66,7 @@ struct NozzleGroupInfo {
         return diameter == rhs.diameter && volume_type == rhs.volume_type && extruder_id == rhs.extruder_id && nozzle_count == rhs.nozzle_count;
     }
 
-    /**
-     * @brief Serializes the nozzle group to a string representation.
-     * @return Serialized string.
-     */
-    std::string serialize() const;
 
-    /**
-     * @brief Deserializes a string representation back to a NozzleGroupInfo.
-     * @param str Serialized string.
-     * @return Deserialized object or std::nullopt.
-     */
-    static std::optional<NozzleGroupInfo> deserialize(const std::string& str);
 };
 
 /**
@@ -231,11 +216,7 @@ public:
  */
 std::vector<NozzleInfo> build_nozzle_list(std::vector<NozzleGroupInfo> info);
 
-/**
- * @brief Builds a physical nozzle list from raw mapping configurations.
- */
-std::vector<NozzleInfo> build_nozzle_list(double diameter, const std::vector<int>& filament_nozzle_map,
-                                          const std::vector<int>& filament_volume_map, const std::vector<int>& filament_map);
+
 
 /**
  * @brief Parses device statistics strings representing installed nozzle parameters.

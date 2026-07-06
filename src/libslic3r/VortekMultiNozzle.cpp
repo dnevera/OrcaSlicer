@@ -1,6 +1,7 @@
 #include "VortekMultiNozzle.hpp"
 #include "VortekLog.hpp"
 #include "PresetBundle.hpp"
+#include "VortekPrintHooks.hpp"
 #include <numeric>
 #include <boost/log/trivial.hpp>
 #include <boost/format.hpp>
@@ -24,38 +25,9 @@ std::string format_diameter_to_str(double diameter) {
     return str;
 }
 
-std::string NozzleInfo::serialize() const {
-    std::stringstream ss;
-    ss << diameter << ":" << static_cast<int>(volume_type) << ":" << extruder_id << ":" << group_id;
-    return ss.str();
-}
 
-std::string NozzleGroupInfo::serialize() const {
-    std::stringstream ss;
-    ss << diameter << ":" << static_cast<int>(volume_type) << ":" << extruder_id << ":" << nozzle_count;
-    return ss.str();
-}
 
-std::optional<NozzleGroupInfo> NozzleGroupInfo::deserialize(const std::string& str) {
-    std::vector<std::string> tokens;
-    std::string token;
-    std::stringstream ss(str);
-    while (std::getline(ss, token, ':')) {
-        tokens.push_back(token);
-    }
-    if (tokens.size() < 4) {
-        return std::nullopt;
-    }
-    try {
-        std::string diameter = tokens[0];
-        NozzleVolumeType volume_type = static_cast<NozzleVolumeType>(std::stoi(tokens[1]));
-        int extruder_id = std::stoi(tokens[2]);
-        int nozzle_count = std::stoi(tokens[3]);
-        return NozzleGroupInfo(diameter, volume_type, extruder_id, nozzle_count);
-    } catch (...) {
-        return std::nullopt;
-    }
-}
+
 
 // ==================== LayeredNozzleGroupResult Implementation ====================
 
@@ -456,28 +428,7 @@ std::vector<NozzleInfo> build_nozzle_list(std::vector<NozzleGroupInfo> nozzle_gr
     return ret;
 }
 
-std::vector<NozzleInfo> build_nozzle_list(double diameter, const std::vector<int>& filament_nozzle_map,
-                                          const std::vector<int>& filament_volume_map, const std::vector<int>& filament_map) {
-    std::string diameter_str = format_diameter_to_str(diameter);
-    std::map<int, std::vector<int>> nozzle_to_filaments;
-    for (size_t idx = 0; idx < filament_nozzle_map.size(); ++idx) {
-        int nozzle_id = filament_nozzle_map[idx];
-        nozzle_to_filaments[nozzle_id].emplace_back(static_cast<int>(idx));
-    }
-    std::vector<NozzleInfo> ret;
-    for (auto& elem : nozzle_to_filaments) {
-        int nozzle_id = elem.first;
-        auto& filaments = elem.second;
-        if (filaments.empty()) continue;
-        NozzleInfo info;
-        info.diameter = diameter_str;
-        info.group_id = nozzle_id;
-        info.extruder_id = filament_map[filaments.front()];
-        info.volume_type = NozzleVolumeType(filament_volume_map[filaments.front()]);
-        ret.emplace_back(std::move(info));
-    }
-    return ret;
-}
+
 
 // Parser for extruder_nozzle_stats (e.g. "0.4:4,0.6:4" per extruder stats)
 std::vector<std::map<NozzleVolumeType, int>> get_extruder_nozzle_stats(const std::vector<std::string>& stats_strings) {
@@ -587,7 +538,7 @@ void ExtruderNozzleStat::on_printer_model_change(PresetBundle* preset_bundle)
     auto max_nozzle_count = preset_bundle->printers.get_selected_preset().config.option<ConfigOptionIntsNullable>("extruder_max_nozzle_count");
     
     // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:301
-    bool is_h2c = (preset_bundle->printers.get_selected_preset().config.opt_string("printer_model") == "Bambu Lab H2C");
+    bool is_h2c = Vortek::is_h2c_printer(preset_bundle);
     
     extruder_nozzle_counts.resize(max_nozzle_count->size());
     for (size_t eid = 0; eid < extruder_nozzle_counts.size(); ++eid) {
