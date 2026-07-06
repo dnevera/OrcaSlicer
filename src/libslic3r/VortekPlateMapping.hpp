@@ -163,6 +163,24 @@ public:
     static void filter_full_config_diff(Slic3r::t_config_option_keys& full_config_diff, const Slic3r::PrintConfig& config);
 
     /**
+     * @brief Filters Vortek computed map keys and handles vector size differences.
+     */
+    static void filter_reslice_diffs(
+        const Slic3r::Print& print,
+        const Slic3r::ConfigBase& new_full_config,
+        Slic3r::t_config_option_keys& print_diff,
+        Slic3r::t_config_option_keys& full_config_diff);
+
+    /**
+     * @brief Logs config diff keys and values for debugging.
+     */
+    static void diag_log_config_diffs(
+        const char* label,
+        const Slic3r::t_config_option_keys& diff_keys,
+        const Slic3r::ConfigBase& old_cfg,
+        const Slic3r::ConfigBase& new_cfg);
+
+    /**
      * @brief Filters Vortek computed map keys from print_diff_set and syncs their values
      *        in full_print_config to prevent sync_after_slicing re-slice loop.
      */

@@ -65,21 +65,137 @@ bool GroupReorder::handle_nozzle_manual_reorder(
     return true;
 }
 
+// Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
+bool GroupReorder::ensure_nozzle_group_result(
+    Slic3r::Print* print,
+    const Slic3r::DynamicPrintConfig& config,
+    const std::vector<int>& filament_maps,
+    int map_mode)
+{
+    if (!print) return false;
+
+    std::vector<unsigned int> used_filaments = print->get_layered_nozzle_group_result() 
+        ? print->get_layered_nozzle_group_result()->get_used_filaments()
+        : std::vector<unsigned int>();
+
+    if (used_filaments.empty()) {
+        for (size_t i = 0; i < filament_maps.size(); ++i) {
+            used_filaments.push_back(i);
+        }
+    }
+
+    auto nozzle_stats = Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(
+        config.option<Slic3r::ConfigOptionStrings>("extruder_nozzle_stats")->values);
+    float nozzle_dia = config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->values.empty()
+        ? 0.4f : (float)config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->values.front();
+
+    std::shared_ptr<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult> nozzle_result;
+
+    if (map_mode == Slic3r::fmmNozzleManual) {
+        auto manual_filament_map = config.option<Slic3r::ConfigOptionInts>("filament_map")->values;
+        std::transform(manual_filament_map.begin(), manual_filament_map.end(), manual_filament_map.begin(), [](int v) { return v - 1; });
+
+        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+            used_filaments,
+            manual_filament_map,
+            config.option<Slic3r::ConfigOptionInts>("filament_volume_map")->values,
+            config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values,
+            nozzle_stats,
+            nozzle_dia
+        );
+        if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
+    } else {
+        std::vector<Slic3r::MultiNozzleUtils::NozzleInfo> nozzle_list;
+        int next_carousel_nozzle = 4;
+        for (size_t i = 0; i < nozzle_stats.size(); ++i) {
+            auto slot_map = nozzle_stats[i];
+            for (auto const& [vtype, count] : slot_map) {
+                for (int c = 0; c < count; ++c) {
+                    Slic3r::MultiNozzleUtils::NozzleInfo nz;
+                    nz.extruder_id = (int)i;
+                    nz.volume_type = vtype;
+
+                    float dia = 0.4f;
+                    if (config.has("nozzle_diameter")) {
+                        auto* opt = config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
+                        if (opt && nz.extruder_id < (int)opt->values.size()) {
+                            dia = (float)opt->values[nz.extruder_id];
+                        }
+                    }
+                    nz.diameter = Slic3r::MultiNozzleUtils::format_diameter_to_str(dia);
+
+                    if (nz.extruder_id == 0) {
+                        nz.group_id = 0;
+                    } else {
+                        nz.group_id = next_carousel_nozzle--;
+                        if (next_carousel_nozzle < 1) next_carousel_nozzle = 4;
+                    }
+                    nozzle_list.push_back(nz);
+                }
+            }
+        }
+
+        std::vector<int> filament_nozzle_idx_map(filament_maps.size(), -1);
+        std::vector<bool> used_nozzle(nozzle_list.size(), false);
+        for (size_t i = 0; i < filament_maps.size(); ++i) {
+            int target_ext = filament_maps[i] - 1;
+            int assigned_idx = -1;
+            for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+                if (!used_nozzle[ni] && nozzle_list[ni].extruder_id == target_ext) {
+                    assigned_idx = (int)ni;
+                    used_nozzle[ni] = true;
+                    break;
+                }
+            }
+            if (assigned_idx == -1) {
+                for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+                    if (nozzle_list[ni].extruder_id == target_ext) {
+                        assigned_idx = (int)ni;
+                        break;
+                    }
+                }
+            }
+            filament_nozzle_idx_map[i] = assigned_idx;
+            VORTEK_LOG(warn, "  filament[" << i << "] ext=" << target_ext
+                << " -> nozzle_idx=" << filament_nozzle_idx_map[i]);
+        }
+
+        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+            filament_nozzle_idx_map, nozzle_list, used_filaments);
+        if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
+    }
+
+    if (nozzle_result) {
+        print->set_nozzle_group_result(nozzle_result);
+        VORTEK_LOG(warn, "ensure_nozzle_group_result: created and set on Print"
+            << " dynamic_nozzle_map=" << nozzle_result->is_support_dynamic_nozzle_map());
+        return true;
+    } else {
+        VORTEK_LOG(warn, "ensure_nozzle_group_result: failed to create LayeredNozzleGroupResult");
+        return false;
+    }
+}
+
+// Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
+void GroupReorder::handle_auto_mode_reorder(
+    Slic3r::Print* print,
+    const std::vector<int>& filament_maps)
+{
+    if (!print || !is_h2c_printer(*print)) return;
+
+    VORTEK_LOG(warn, "handle_auto_mode_reorder: initializing nozzle_group_result for auto mode");
+    ensure_nozzle_group_result(print, print->full_print_config(), filament_maps, print->config().filament_map_mode.value);
+}
+
 // Reference to BBS: BambuStudio PR#1 / commit 284ae6e2a5 — ToolOrdering.cpp sort_and_build_data fmmManual branch
 void GroupReorder::handle_manual_mode_reorder(
     Slic3r::Print* print,
     const std::vector<int>& filament_maps)
 {
-    // Guard: only H2C printers with carousel need M632 priming initialization.
     if (!print || !is_h2c_printer(*print)) {
         return;
     }
 
-    // filament_maps is 1-based: 1 = Left (fixed nozzle), 2 = Right (carousel).
-    // Only run when at least one filament is assigned to the carousel (extruder 2).
-    // An all-Left print has no nozzle changes and needs no priming; calling
-    // update_filament_maps_to_config() there would drive the single-nozzle print down
-    // the multi-nozzle fake-wipe-tower path (empty z_and_depth_pairs → crash).
     const bool uses_carousel = std::any_of(filament_maps.begin(), filament_maps.end(),
                                             [](int m) { return m == 2; });
     if (!uses_carousel) {
@@ -89,23 +205,12 @@ void GroupReorder::handle_manual_mode_reorder(
 
     VORTEK_LOG(warn, "handle_manual_mode_reorder: carousel used in Manual mode — initializing nozzle_group_result via update_filament_maps_to_config");
 
-    // Call update_filament_maps_to_config with EMPTY volume/nozzle maps so that
-    // Step 1 (nozzle slot assignment) and Step 2 (volume type from nozzle_volume_type)
-    // are always fully recalculated from filament_maps.
-    //
-    // BUG that was fixed: previously we passed print->config().filament_volume_map.values
-    // and print->config().filament_nozzle_map.values here. If the project was saved with
-    // stale 1-element maps (e.g. loaded from an old 3MF), the idempotency guard in
-    // update_filament_maps_to_config would see the 1-element maps as matching the
-    // (also 1-element) computed result and return early → maps never expanded to full
-    // filament count → 3MF saved with ['1'] and ['0'] instead of 5-element arrays.
-    //
-    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp (filament_nozzle_map write)
-    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp (on_printer_model_change)
     print->update_filament_maps_to_config(
         filament_maps,
-        std::vector<int>(),   // force Step 2 to rebuild volume types from nozzle_volume_type
-        std::vector<int>());  // force Step 1 to rebuild carousel slot assignments from filament_maps
+        std::vector<int>(),   
+        std::vector<int>());  
+
+    ensure_nozzle_group_result(print, print->full_print_config(), filament_maps, Slic3r::fmmManual);
 }
 
 } // namespace Vortek

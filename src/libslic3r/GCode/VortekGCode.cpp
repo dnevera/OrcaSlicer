@@ -208,7 +208,13 @@ void patch_toolchange_dyn_config(
             extruder_id = nozzle_info->extruder_id;
             config_extruder_idx = extruder_id - 1; // Convert 1-based physical ID to 0-based array index
             nozzle_id = nozzle_info->group_id; // Physical nozzle changer slot ID
-            diameter = std::stof(nozzle_info->diameter);
+            if (!nozzle_info->diameter.empty()) {
+                try {
+                    diameter = std::stof(nozzle_info->diameter);
+                } catch (...) {
+                    VORTEK_LOG(error, "VortekGCode: failed to parse nozzle diameter: " << nozzle_info->diameter);
+                }
+            }
         }
     }
 

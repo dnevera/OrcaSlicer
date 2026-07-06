@@ -3,6 +3,8 @@
 
 #include <vector>
 #include <memory>
+#include <unordered_map>
+#include <set>
 
 namespace Slic3r {
     class Print;
@@ -13,6 +15,7 @@ namespace Slic3r {
     class PrintConfig;
     class Preset;
     class ConfigBase;
+    struct ExtruderNozleInfo;
     namespace MultiNozzleUtils {
         class NozzleGroupResultBase;
     }
@@ -107,6 +110,23 @@ public:
         int next_filament_id,
         size_t layer_idx,
         float default_volume
+    );
+
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1341-1358
+    static bool apply_h2c_variant_overrides(
+        Slic3r::Print& print,
+        Slic3r::DynamicPrintConfig& new_full_config
+    );
+
+private:
+    static void update_filament_config_values_for_multiple_extruders(
+        Slic3r::DynamicPrintConfig &printer_config,
+        const std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> &filament_extruder_nozzle_infos,
+        int extruder_count,
+        int extruder_nozzle_volume_count,
+        std::set<std::string> &key_set,
+        std::string id_name,
+        std::string variant_name
     );
 };
 

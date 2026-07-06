@@ -2,6 +2,7 @@
 #include "Print.hpp"
 #include "PrintConfig.hpp"
 #include "VortekLog.hpp"
+#include "VortekGroupReorder.hpp"
 #include "PresetBundle.hpp"
 #include "AppConfig.hpp"
 #include "Preset.hpp"
@@ -53,7 +54,8 @@ static void trim_option_values(OptType *opt, const std::vector<int> &trim_param_
     opt->values = std::move(new_values);
 }
 
-static void update_filament_config_values_for_multiple_extruders(
+// Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp L8756-8762
+void PrintHooks::update_filament_config_values_for_multiple_extruders(
     Slic3r::DynamicPrintConfig &printer_config,
     const std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> &filament_extruder_nozzle_infos,
     int extruder_count,
@@ -920,6 +922,70 @@ void PresetBundleHooks::update_nozzle_stat_on_compatibility_change(
     if (is_h2c_printer(printer_preset)) {
         preset_bundle->extruder_nozzle_stat.on_printer_model_change(preset_bundle);
     }
+}
+
+// Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1341-1358
+bool PrintHooks::apply_h2c_variant_overrides(
+    Slic3r::Print& print,
+    Slic3r::DynamicPrintConfig& new_full_config)
+{
+    // Rule: Vortek hooks are isolated to H2C printers only
+    if (!is_h2c_printer(new_full_config)) {
+        return false;
+    }
+
+    std::vector<int> filament_maps = new_full_config.option<Slic3r::ConfigOptionInts>("filament_map")->values;
+    int map_mode = new_full_config.option<Slic3r::ConfigOptionEnumGeneric>("filament_map_mode")->value;
+
+    // Call ensure_nozzle_group_result using the incoming new_full_config.
+    // This builds and caches it on the Print object BEFORE slicing begins.
+    GroupReorder::ensure_nozzle_group_result(&print, new_full_config, filament_maps, map_mode);
+
+    auto group_result = print.get_layered_nozzle_group_result();
+    if (!group_result) {
+        return false;
+    }
+
+    // Sync resolved maps directly to new_full_config to prevent double slice
+    auto nozzle_map = group_result->get_nozzle_map(-1);
+    auto volume_map = group_result->get_volume_map(-1);
+    new_full_config.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts(nozzle_map));
+    new_full_config.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
+
+    const auto& full_cfg = print.full_print_config();
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_map_2"))
+        new_full_config.set_key_value("filament_map_2", opt->clone());
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("physical_extruder_map"))
+        new_full_config.set_key_value("physical_extruder_map", opt->clone());
+
+    std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> filament_extruder_map;
+    auto filament_count = new_full_config.option<Slic3r::ConfigOptionStrings>("filament_type")->values.size();
+    auto extruder_type  = new_full_config.option<Slic3r::ConfigOptionEnumsGeneric>("extruder_type")->values;
+
+    for (int fidx = 0; fidx < (int)filament_count; ++fidx) {
+        auto                        used_nozzles = group_result->get_nozzles_for_filament(fidx);
+        std::set<Slic3r::ExtruderNozleInfo> extruder_nozzle_set;
+        for (auto nozzle : used_nozzles) {
+            Slic3r::ExtruderNozleInfo tmp;
+            tmp.extruder_type      = Slic3r::ExtruderType(extruder_type[nozzle.extruder_id]);
+            tmp.nozzle_volume_type = nozzle.volume_type;
+            extruder_nozzle_set.insert(tmp);
+        }
+        filament_extruder_map[fidx] = std::vector<Slic3r::ExtruderNozleInfo>(extruder_nozzle_set.begin(), extruder_nozzle_set.end());
+    }
+
+    int extruder_count = new_full_config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->values.size();
+    int extruder_volume_type_count = 1;
+    std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
+    filament_keys.insert("filament_self_index");
+
+    update_filament_config_values_for_multiple_extruders(
+        new_full_config, filament_extruder_map, extruder_count, extruder_volume_type_count,
+        filament_keys, "filament_self_index", "filament_extruder_variant"
+    );
+
+    VORTEK_LOG(warn, "apply_h2c_variant_overrides: successfully applied H2C resolved variants to new_full_config");
+    return true;
 }
 
 } // namespace Vortek

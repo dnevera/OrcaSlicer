@@ -31,7 +31,7 @@
 //   - VortekPrintHooks:  injects nvtHighFlow into filament_volume_map  (ASSIGNMENT)
 // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp – Hybrid nozzle slot assignment
 // ---------------------------------------------------------------------------
-static constexpr bool VORTEK_DEBUG_HF_NOZZLE_OVERRIDE = true; // [DEBUG] Enable for HF pipeline test, disable before release
+static constexpr bool VORTEK_DEBUG_HF_NOZZLE_OVERRIDE = false; // [DEBUG] Enable for HF pipeline test, disable before release
 
 #endif // VORTEK_LOG_HPP
 

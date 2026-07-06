@@ -1189,13 +1189,37 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     auto opt_filament_map = new_full_config.option<ConfigOptionInts>("filament_map");
     std::vector<int> filament_maps = opt_filament_map ? opt_filament_map->values : std::vector<int>();
 
+    // Vortek: apply filament overrides directly to new_full_config's retract keys
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1357-1361 (update_filament_config_values_for_multiple_extruders)
+    if (Vortek::is_h2c_printer(new_full_config) && !filament_maps.empty()) {
+        const std::vector<std::string> &extruder_retract_keys = print_config_def.extruder_retract_keys();
+        const std::string               filament_prefix       = "filament_";
+        for (const auto &opt_key : extruder_retract_keys) {
+            ConfigOption *opt_new_machine  = new_full_config.option(opt_key);
+            const ConfigOption *opt_new_filament = new_full_config.option(filament_prefix + opt_key);
+            if (opt_new_machine && opt_new_filament) {
+                const auto* new_fil_vec = dynamic_cast<const ConfigOptionVectorBase*>(opt_new_filament);
+                if (new_fil_vec && filament_maps.size() == new_fil_vec->size()) {
+                    opt_new_machine->apply_override(opt_new_filament, filament_maps);
+                }
+            }
+        }
+    }
+
     // Find modified keys of the various configs. Resolve overrides extruder retract values by filament profiles.
     DynamicPrintConfig   filament_overrides;
     //BBS: add plate index
     t_config_option_keys print_diff       = print_config_diffs(m_config, new_full_config, filament_overrides, this->m_plate_index, filament_maps);
     t_config_option_keys full_config_diff = full_print_config_diffs(m_full_print_config, new_full_config, this->m_plate_index);
+
+    // [Vortek] Filter out derived computed keys that should not trigger re-slice
+    Vortek::PlateMapping::filter_reslice_diffs(*this, new_full_config, print_diff, full_config_diff);
     // [Vortek] Filter variant-transformed keys that diverge mid-slice (H2C multi-nozzle only)
     Vortek::PlateMapping::filter_full_config_diff(full_config_diff, m_config);
+
+    // [Vortek DIAG] Log diff keys and values for re-slice debugging
+    Vortek::PlateMapping::diag_log_config_diffs("print_diff", print_diff, m_config, new_full_config);
+    Vortek::PlateMapping::diag_log_config_diffs("full_config_diff", full_config_diff, m_full_print_config, new_full_config);
 
     // Collect changes to object and region configs.
     t_config_option_keys object_diff      = m_default_object_config.diff(new_full_config);

@@ -432,4 +432,95 @@ void PlateMapping::filter_print_diff_set(
     }
 }
 
+void PlateMapping::filter_reslice_diffs(
+    const Slic3r::Print& print,
+    const Slic3r::ConfigBase& new_full_config,
+    Slic3r::t_config_option_keys& print_diff,
+    Slic3r::t_config_option_keys& full_config_diff)
+{
+    if (!is_h2c_printer(print.config()))
+        return;
+
+    auto erase_key = [](Slic3r::t_config_option_keys& keys, const std::string& key) {
+        keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
+    };
+    // All Vortek computed/derived keys that are recomputed on every apply()
+    // and must not trigger re-slice invalidation.
+    static const std::vector<std::string> s_vortek_keys = {
+        "filament_map_2", "filament_nozzle_map", "filament_volume_map",
+        "physical_extruder_map"
+    };
+    for (const auto& key : s_vortek_keys) {
+        erase_key(print_diff, key);
+        erase_key(full_config_diff, key);
+    }
+
+    // Erase keys whose only difference is vector size expansion where elements are equal up to the smaller size
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
+    auto filter_vector_size_diffs = [&](Slic3r::t_config_option_keys& diff_keys, const Slic3r::ConfigBase& old_cfg) {
+        auto it = diff_keys.begin();
+        while (it != diff_keys.end()) {
+            const std::string& key = *it;
+            const Slic3r::ConfigOption* opt_old = old_cfg.option(key);
+            const Slic3r::ConfigOption* opt_new = new_full_config.option(key);
+            if (opt_old && opt_new) {
+                const auto* old_vec = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(opt_old);
+                const auto* new_vec = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(opt_new);
+                if (old_vec && new_vec) {
+                    size_t size_old = old_vec->size();
+                    size_t size_new = new_vec->size();
+                    if (size_old != size_new) {
+                        std::vector<std::string> vals_old = old_vec->vserialize();
+                        std::vector<std::string> vals_new = new_vec->vserialize();
+                        size_t min_size = std::min(size_old, size_new);
+                        bool elements_equal = true;
+                        for (size_t i = 0; i < min_size; ++i) {
+                            if (vals_old[i] != vals_new[i]) {
+                                elements_equal = false;
+                                break;
+                            }
+                        }
+                        if (elements_equal) {
+                            VORTEK_LOG(warn, "filter_reslice_diffs: suppressing vector size difference for key: " << key
+                                             << " (old_size=" << size_old << ", new_size=" << size_new << ")");
+                            it = diff_keys.erase(it);
+                            continue;
+                        }
+                    }
+                }
+            }
+            ++it;
+        }
+    };
+
+    filter_vector_size_diffs(print_diff, print.config());
+    filter_vector_size_diffs(full_config_diff, print.full_print_config());
+}
+
+// [Vortek DIAG] Log config diff keys and their old/new values for re-slice debugging.
+// No-op for non-H2C printers.
+void PlateMapping::diag_log_config_diffs(
+    const char* label,
+    const Slic3r::t_config_option_keys& diff_keys,
+    const Slic3r::ConfigBase& old_cfg,
+    const Slic3r::ConfigBase& new_cfg)
+{
+    if (!is_h2c_printer(old_cfg))
+        return;
+    if (diff_keys.empty()) return;
+    std::string keys_str;
+    for (const auto& k : diff_keys) keys_str += k + " ";
+    VORTEK_LOG(warn, "DIAG " << label << " keys (" << diff_keys.size() << "): " << keys_str);
+    for (const auto& k : diff_keys) {
+        const Slic3r::ConfigOption* old_opt = old_cfg.option(k);
+        const Slic3r::ConfigOption* new_opt = new_cfg.option(k);
+        std::string old_val = old_opt ? old_opt->serialize() : "<missing>";
+        std::string new_val = new_opt ? new_opt->serialize() : "<missing>";
+        // Truncate long values for readability
+        if (old_val.size() > 120) old_val = old_val.substr(0, 120) + "...";
+        if (new_val.size() > 120) new_val = new_val.substr(0, 120) + "...";
+        VORTEK_LOG(warn, "DIAG   " << label << " [" << k << "] old=" << old_val << " new=" << new_val);
+    }
+}
+
 } // namespace Vortek

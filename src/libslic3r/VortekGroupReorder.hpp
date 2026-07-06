@@ -51,11 +51,22 @@ static bool handle_nozzle_manual_reorder(
  * @param print Pointer to the Print object
  * @param filament_maps Current 1-based filament→extruder map (1=Left, 2=Right/carousel)
  */
-static void handle_manual_mode_reorder(
-    Slic3r::Print* print,
-    const std::vector<int>& filament_maps);
+    static void handle_manual_mode_reorder(
+        Slic3r::Print* print,
+        const std::vector<int>& filament_maps);
 
-}; // class GroupReorder
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
+    static void handle_auto_mode_reorder(
+        Slic3r::Print* print,
+        const std::vector<int>& filament_maps);
+
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp L2708-2719
+    static bool ensure_nozzle_group_result(
+        Slic3r::Print* print,
+        const Slic3r::DynamicPrintConfig& config,
+        const std::vector<int>& filament_maps,
+        int map_mode);
+};
 } // namespace Vortek
 
 #endif // VORTEK_GROUP_REORDER_HPP
