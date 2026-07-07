@@ -327,6 +327,12 @@ void PlateMapping::filter_print_diff_set(
             VORTEK_LOG(warn, "filter_print_diff_set: suppressed and synced key '" << k << "'");
         }
     }
+
+    // BBS retract recompute: suppress false retract diffs caused by
+    // filament_map vs filament_map_2 mismatch. Delegated to ConfigSync
+    // (sync layer owns this semantic — resolves apply_override index divergence).
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
+    Vortek::ConfigSync::suppress_retract_override_diffs(print_diff_set, config, new_full_config);
 }
 
 void PlateMapping::filter_reslice_diffs(
@@ -499,7 +505,17 @@ void PlateMapping::restore_filament_variant_overrides_h2c(
         return;
     }
 
-    // Delegate to orchestrator: m_ori_full_print_config → new_full_config
+    // If align_incoming_config already ran (nozzle_group_result exists),
+    // skip restore — align already wrote correct H2C-expanded values from
+    // m_full_print_config (source of truth, size=6 with proper nozzle mapping).
+    // Calling restore here would overwrite them with upstream-expanded values
+    // from m_ori_full_print_config (wrong size/layout), causing false diffs.
+    auto group_result = print.get_nozzle_group_result();
+    if (group_result) {
+        return;
+    }
+
+    // First apply only: undo upstream variant expansion
     Vortek::ConfigSync sync(print);
     sync.restore_variants(new_full_config);
 }

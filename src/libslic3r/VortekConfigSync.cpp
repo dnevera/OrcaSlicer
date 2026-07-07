@@ -58,8 +58,20 @@ const std::unordered_set<std::string>& ConfigSync::managed_keys() {
 
 bool ConfigSync::copy_key(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst, const std::string& key) {
     const Slic3r::ConfigOption* opt_src = src.option(key);
+    if (!opt_src) return false;
+
+    // For DynamicPrintConfig: clone+set_key_value guarantees full copy
+    // including vector resize (e.g. GUI size=4 → H2C size=6).
+    // operator= does NOT resize vectors when src and dst have different sizes.
+    auto* dyn_dst = dynamic_cast<Slic3r::DynamicPrintConfig*>(&dst);
+    if (dyn_dst) {
+        dyn_dst->set_key_value(key, opt_src->clone());
+        return true;
+    }
+
+    // For static configs (PrintConfig): operator= works within fixed storage
     Slic3r::ConfigOption* opt_dst = dst.option(key);
-    if (opt_src && opt_dst) {
+    if (opt_dst) {
         *opt_dst = *opt_src;
         return true;
     }
@@ -172,6 +184,47 @@ size_t ConfigSync::filter_computed_keys(std::unordered_set<std::string>& diff_se
     size_t suppressed = 0;
     for (const auto& k : computed_keys()) {
         suppressed += diff_set.erase(k);
+    }
+    return suppressed;
+}
+
+size_t ConfigSync::suppress_retract_override_diffs(
+    std::unordered_set<std::string>& print_diff_set,
+    const Slic3r::PrintConfig& config,
+    const Slic3r::DynamicPrintConfig& new_full_config)
+{
+    // BBS retract recompute pattern: suppress false retract diffs.
+    // print_config_diffs uses filament_map (extruder IDs) for apply_override,
+    // but sync_baseline wrote m_config with filament_map_2 (variant indices).
+    // Recompute retract keys with old filament_map and suppress those that
+    // match m_config — same mechanism as BBS PrintApply.cpp L1445-1463.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
+    if (print_diff_set.empty()) return 0;
+
+    const auto& retract_keys = Slic3r::print_config_def.extruder_retract_keys();
+    const std::string filament_prefix = "filament_";
+    const auto& old_filament_map = config.filament_map.values;
+
+    std::vector<int> old_f_map_indices(old_filament_map.size(), 0);
+    for (size_t i = 0; i < old_filament_map.size(); i++)
+        old_f_map_indices[i] = old_filament_map[i] - 1;
+
+    size_t suppressed = 0;
+    for (const auto& rk : retract_keys) {
+        if (print_diff_set.find(rk) == print_diff_set.end())
+            continue;
+        const Slic3r::ConfigOption* opt_old   = config.option(rk);
+        const Slic3r::ConfigOption* opt_new_m = new_full_config.option(rk);
+        const Slic3r::ConfigOption* opt_new_f = new_full_config.option(filament_prefix + rk);
+        if (opt_old && opt_new_m && opt_new_f) {
+            std::unique_ptr<Slic3r::ConfigOption> opt_recomputed(opt_new_m->clone());
+            opt_recomputed->apply_override(opt_new_f, old_f_map_indices);
+            if (*opt_old == *opt_recomputed) {
+                print_diff_set.erase(rk);
+                ++suppressed;
+                VORTEK_LOG(warn, "ConfigSync::suppress_retract_override_diffs: suppressed '" << rk << "'");
+            }
+        }
     }
     return suppressed;
 }

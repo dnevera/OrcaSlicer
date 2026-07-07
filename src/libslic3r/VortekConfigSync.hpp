@@ -3,8 +3,8 @@
 
 /**
  * @file VortekConfigSync.hpp
- * @brief Vortek Config Synchronization Pipeline — orchestrator for H2C multi-nozzle
- *        configuration data flow across the Print lifecycle.
+ * @brief Vortek Config Synchronization Pipeline — type-agnostic orchestrator
+ *        for H2C multi-nozzle configuration data flow across Print lifecycle.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  1. OVERVIEW
@@ -20,9 +20,45 @@
  * support N:M:E mapping by intercepting configuration at specific pipeline
  * stages and replacing upstream expansion with H2C-aware expansion.
  *
- * ConfigSync is the centralized orchestrator that manages all H2C-specific
- * configuration keys across four config objects in Print, ensuring data
- * consistency throughout the GUI → apply → slice → apply cycle.
+ * ConfigSync is the centralized, TYPE-AGNOSTIC orchestrator that manages
+ * all H2C-specific configuration keys across four config objects in Print,
+ * ensuring data consistency throughout the GUI → apply → slice → apply cycle.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  1a. SEPARATION OF CONCERNS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The H2C config pipeline has two distinct layers:
+ *
+ *   ┌──────────────────────────────────────────────────────────────────┐
+ *   │  COMPUTE LAYER (type-aware)                                     │
+ *   │  • compute_vortek_derived_maps() — resolves nozzle assignments  │
+ *   │  • update_filament_maps_to_config() — H2C variant expansion     │
+ *   │  • update_values_to_printer_extruders() (BBS upstream)          │
+ *   │                                                                 │
+ *   │  Knows about: Std/HF/Hybrid nozzle types, extruder_nozzle_stats,│
+ *   │  nozzle_volume_type, filament_volume_map, get_index_for_extruder│
+ *   │  Produces: correctly expanded vectors in m_full_print_config    │
+ *   │  (size = num_nozzle_slots, e.g. 6)                              │
+ *   └──────────────────────┬───────────────────────────────────────────┘
+ *                          │ source of truth (m_full_print_config)
+ *                          ▼
+ *   ┌──────────────────────────────────────────────────────────────────┐
+ *   │  SYNC LAYER (type-agnostic) — this class                        │
+ *   │                                                                 │
+ *   │  Does NOT know about Std/HF/Hybrid nozzle types.                │
+ *   │  Simply copies values from source of truth to all other configs:│
+ *   │    • align:         m_full_print_config → new_full_config        │
+ *   │    • sync_baseline: m_full_print_config → m_config               │
+ *   │                                                                 │
+ *   │  Guarantees: all 4 config objects are consistent, regardless    │
+ *   │  of nozzle types, nozzle counts, or Hybrid modifiers.           │
+ *   └──────────────────────────────────────────────────────────────────┘
+ *
+ * This separation means ConfigSync works identically for any nozzle
+ * configuration: Standard-only, Standard+HF, or Hybrid. When the user
+ * changes nozzle_volume_type, the compute layer produces new values,
+ * and ConfigSync propagates them without interpretation.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  2. CONFIG OBJECTS
@@ -87,15 +123,28 @@
  *   A4. *** ConfigSync::align_incoming_config() ***
  *       Direction: m_full_print_config → new_full_config
  *       Replaces upstream expansion with the source-of-truth values
- *       from the last completed slice. All managed keys are copied,
- *       ensuring diff(m_config, new_full_config) = 0 for stable keys.
- *       No-op on first apply (m_full_print_config not yet populated).
+ *       from the last completed slice. All managed keys are copied
+ *       using clone+set_key_value (full vector replacement including resize),
+ *       ensuring new_full_config gets size=num_nozzle_slots (e.g. 6)
+ *       regardless of upstream size (e.g. 4).
+ *       Guarantees: diff(m_config, new_full_config) = 0 for stable keys.
+ *       No-op on first apply (no nozzle_group_result yet).
  *
  *   A5. *** ConfigSync::restore_variants() ***
  *       Direction: m_ori_full_print_config → new_full_config
  *       Restores filament variant keys to their pre-expansion state,
- *       undoing A3's incorrect upstream expansion for keys that must
- *       preserve the raw GUI values until H2C-aware expansion in Phase B.
+ *       undoing A3's incorrect upstream expansion.
+ *
+ *       *** MUTUAL EXCLUSION with A4: ***
+ *       restore_variants is SKIPPED when nozzle_group_result exists
+ *       (i.e., when align has already run). This is critical because:
+ *       - align writes correct H2C-expanded values (size=6) from source of truth
+ *       - restore would overwrite them with upstream-expanded values from
+ *         m_ori_full_print_config (wrong size/layout), causing false diffs
+ *
+ *       Execution matrix:
+ *         First apply:  align=SKIP  restore=RUN   (undo upstream, no source of truth yet)
+ *         Second+ apply: align=RUN   restore=SKIP  (source of truth available)
  *
  *   A6. Diff computation
  *       print_diff      = print_config_diffs(m_config, new_full_config, ...)
@@ -111,10 +160,11 @@
  *   B1. Reset to clean base
  *       m_full_print_config = m_ori_full_print_config  (raw values)
  *
- *   B2. H2C-aware variant expansion
+ *   B2. H2C-aware variant expansion (compute layer)
  *       update_filament_config_values_for_multiple_extruders()
  *       Uses nozzle_group_result to correctly map filaments to nozzle variants.
- *       Expands vectors to num_variants (e.g. 6).
+ *       Accounts for nozzle_volume_type (Std/HF/Hybrid) via get_index_for_extruder.
+ *       Expands vectors to num_nozzle_slots (e.g. 6).
  *       BBS ref: PrintApply.cpp L1338-1362
  *
  *   B3. Retract override application
@@ -130,11 +180,14 @@
  *
  *   After one full cycle (A → B), all four configs are consistent:
  *     m_config[managed_keys] == m_full_print_config[managed_keys]
- *   On next apply (A4), align copies m_full_print_config → new_full_config,
- *   resulting in: m_config == new_full_config → diff = 0 → no reslice.
+ *   On next apply (A4), align copies m_full_print_config → new_full_config
+ *   with full vector resize (clone+set_key_value), resulting in:
+ *     m_config == new_full_config → diff = 0 → no reslice.
  *
- *   A user-initiated change (e.g. filament_map_mode switch) produces
- *   a diff only for the actually-changed key → single expected reslice.
+ *   A user-initiated change (e.g. filament_map_mode, nozzle_volume_type)
+ *   produces a diff only for the actually-changed key → single expected
+ *   reslice. The compute layer then recalculates values for the new nozzle
+ *   configuration, sync_baseline propagates them, and the system stabilizes.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  4. MANAGED KEY CATEGORIES
@@ -169,19 +222,35 @@
  *               filament_pre_cooling_temperature_nc
  *
  * ═══════════════════════════════════════════════════════════════════════════
- *  5. DIFF FILTERING
+ *  5. DIFF FILTERING (safety net)
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Despite synchronization, some residual diffs may appear due to vector
- * size differences between GUI-sized configs (num_filaments) and
- * H2C-expanded configs (num_variants). ConfigSync provides static
- * filter methods to suppress these known benign diffs:
+ * With clone+set_key_value copy semantics and the align/restore mutual
+ * exclusion, the sync pipeline should be fully idempotent — no residual
+ * diffs for managed keys. The filter methods below exist as a SAFETY NET
+ * for edge cases (e.g., timing during first apply, race conditions):
  *
  *   filter_managed_keys()  — removes all managed keys from a diff vector
  *   filter_computed_keys() — removes computed map keys from a diff set
  *
- * These filters are a safety net; the goal is to eliminate them by ensuring
- * full idempotency of the sync pipeline.
+ * If filters are actively suppressing keys in steady state, it indicates
+ * a bug in the sync pipeline that should be investigated.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  6. COPY SEMANTICS
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * copy_key() uses two strategies depending on destination type:
+ *
+ *   DynamicPrintConfig: clone() + set_key_value()
+ *     Full replacement including vector resize. This is essential because
+ *     operator= does NOT resize ConfigOptionFloats/Strings vectors when
+ *     source and destination have different sizes.
+ *     Example: GUI retraction_length (size=4) ← H2C source of truth (size=6)
+ *
+ *   Static PrintConfig: operator=
+ *     Works within fixed storage. Vector resize happens naturally because
+ *     ConfigOptionFloats::operator= copies the values vector.
  */
 
 #include "libslic3r/PrintConfig.hpp"
@@ -206,6 +275,8 @@ public:
 
     /// Phase A4: Align incoming config with source of truth.
     /// Direction: m_full_print_config → new_full_config
+    /// Uses clone+set_key_value for full vector resize.
+    /// Only runs when nozzle_group_result exists (second+ apply).
     /// @return Number of keys copied.
     int align_incoming_config(Slic3r::DynamicPrintConfig& new_full_config);
 
@@ -216,6 +287,7 @@ public:
 
     /// Phase A5: Restore filament variant keys to pre-expansion state.
     /// Direction: m_ori_full_print_config → new_full_config
+    /// MUTUALLY EXCLUSIVE with align — skipped when nozzle_group_result exists.
     /// @return Number of keys restored.
     int restore_variants(Slic3r::DynamicPrintConfig& new_full_config);
 
@@ -241,9 +313,23 @@ public:
     /// Filter computed map keys from an unordered_set diff. Returns count suppressed.
     static size_t filter_computed_keys(std::unordered_set<std::string>& diff_set);
 
+    /// Suppress false retract key diffs caused by filament_map vs filament_map_2 mismatch.
+    /// print_config_diffs uses filament_map (extruder IDs) for apply_override, but
+    /// sync_baseline wrote m_config with values computed via filament_map_2 (variant indices).
+    /// Recomputes retract keys with old filament_map and erases diffs where result matches.
+    /// Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
+    /// @return Number of retract keys suppressed.
+    static size_t suppress_retract_override_diffs(
+        std::unordered_set<std::string>& print_diff_set,
+        const Slic3r::PrintConfig& config,
+        const Slic3r::DynamicPrintConfig& new_full_config);
+
 private:
     Slic3r::Print& m_print;
 
+    /// Copies a single key from src to dst.
+    /// DynamicPrintConfig: uses clone+set_key_value (full vector resize).
+    /// Static configs: uses operator= (fixed storage).
     static bool copy_key(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst, const std::string& key);
     static int sync_all_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
     static int sync_variant_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
