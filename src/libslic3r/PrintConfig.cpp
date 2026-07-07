@@ -9784,10 +9784,14 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                 }
             }
         }
-        // Vortek H2C hook: expand variant_index for Hybrid carousel (no-op for other printers).
+        // TODO: variant_count may be greater than extruder_count when a printer supports
+        // multiple process-parameter variants per physical extruder (H2C: Standard + High Flow).
+        // expand_variant_index_h2c() rebuilds variant_index to map each sub-variant slot
+        // to its correct source index in print_extruder_variant.
+        // The write loops below use variant_count so all slots are populated correctly.
         // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp - extend_extruder_variant
         ::Vortek::PrintHooks::expand_variant_index_h2c(printer_config, variant_index, extruder_count);
-        const int variant_count = (int)variant_index.size(); // equals extruder_count for non-H2C
+        const int variant_count = (int)variant_index.size(); // == extruder_count for standard printers
 
         const ConfigDef       *config_def     = this->def();
         if (!config_def) {
