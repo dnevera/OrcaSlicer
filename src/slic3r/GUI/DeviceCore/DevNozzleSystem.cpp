@@ -152,8 +152,13 @@ void DevNozzleSystemParser::ParseV2_0(const json& nozzle_json, DevNozzleSystem* 
         //   Using is_on_rack from raw_id avoids ID collision when head and rack nozzles share physical_id.
         Vortek::DeviceHooks::process_nozzle_placement(system, nozzle_obj, raw_id);
         Vortek::DeviceHooks::parse_nozzle_filament(system, nozzle_obj.m_nozzle_id, njon);
-        int is_on_rack = DevUtil::get_hex_bits(raw_id, 1);
-        if (is_on_rack != 1) {
+        if (Vortek::DeviceHooks::is_h2c_system(system)) {
+            int is_on_rack = DevUtil::get_hex_bits(raw_id, 1);
+            if (is_on_rack != 1) {
+                system->m_nozzles[nozzle_obj.m_nozzle_id] = nozzle_obj;
+            }
+        } else {
+            // Default OrcaSlicer behavior for non-H2C printers: unconditionally add to head nozzles
             system->m_nozzles[nozzle_obj.m_nozzle_id] = nozzle_obj;
         }
     }

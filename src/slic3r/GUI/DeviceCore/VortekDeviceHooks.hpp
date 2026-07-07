@@ -110,6 +110,7 @@ void process_nozzle_placement(
     int raw_id);
 
 bool is_h2c_printer(const Slic3r::MachineObject* obj);
+bool is_h2c_system(const Slic3r::DevNozzleSystem* system);
 
 /**
  * @brief H2C-only: resolves the correct NozzleVolumeType for an extruder given its nozzle stats.

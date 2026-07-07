@@ -302,12 +302,20 @@ void assign_ams_bindings(
     s_ams_binded_switcher_pos[curr_ams] = binded_switcher_pos;
 }
 
+bool is_h2c_system(const Slic3r::DevNozzleSystem* system) {
+    auto rack = get_nozzle_rack(system);
+    return rack && rack->IsSupported();
+}
+
 void process_nozzle_placement(
     Slic3r::DevNozzleSystem* system,
     Slic3r::DevNozzle& nozzle_obj,
     int raw_id)
 {
     if (!system) return;
+
+    // H2C Hook Isolation: immediately return if the nozzle system does not belong to an H2C machine.
+    if (!is_h2c_system(system)) return;
 
     int physical_id = Slic3r::DevUtil::get_hex_bits(raw_id, 0);
     int is_on_rack = Slic3r::DevUtil::get_hex_bits(raw_id, 1);
