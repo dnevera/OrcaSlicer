@@ -730,7 +730,11 @@ void wgtDeviceNozzleRackHotendUpdate::UpdateInfo(const DevNozzle& nozzle)
     }
 
     // Update firmware info
-    const DevFirmwareVersionInfo& firmware = Vortek::DeviceHooks::get_nozzle_firmware_info(nozzle, m_nozzle_rack.lock() ? m_nozzle_rack.lock()->GetNozzleSystem() : nullptr);
+    const DevFirmwareVersionInfo& firmware = Vortek::DeviceHooks::get_nozzle_firmware_info(
+        nozzle,
+        m_nozzle_rack.lock() ? m_nozzle_rack.lock()->GetNozzleSystem() : nullptr,
+        m_rack_nozzle_id >= 0
+    );
     if (Vortek::DeviceHooks::is_nozzle_unknown(nozzle))
     {
         m_sn_label->SetLabel(wxString::Format("%s: --", _L("SN")));

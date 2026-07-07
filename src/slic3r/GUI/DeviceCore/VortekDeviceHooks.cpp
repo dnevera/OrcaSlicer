@@ -909,9 +909,9 @@ std::optional<int> get_replace_nozzle_tar(const Slic3r::DevNozzleSystem* system)
     return std::nullopt;
 }
 
-bool is_nozzle_on_rack_helper(const Slic3r::DevNozzleSystem* system, int nozzle_id) {
-    auto rack = get_nozzle_rack(system);
-    return rack ? rack->IsNozzleOnRack(nozzle_id) : false;
+bool is_nozzle_on_rack_helper(const Slic3r::DevNozzleSystem* system, int nozzle_id, int raw_id) {
+    if (!system || !is_h2c_system(system)) return false;
+    return Slic3r::DevUtil::get_hex_bits(raw_id, 1) == 1;
 }
 
 std::vector<std::vector<std::vector<float>>> get_full_flush_matrix_helper(const Slic3r::PresetBundle* preset_bundle) {
@@ -950,9 +950,8 @@ Slic3r::DevNozzle get_nozzle_by_pos_id(const Slic3r::DevNozzleSystem* system, in
     }
 }
 
-int get_nozzle_pos_id(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system) {
-    auto rack = get_nozzle_rack(system);
-    if (rack && rack->IsNozzleOnRack(nozzle.m_nozzle_id)) {
+int get_nozzle_pos_id(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system, bool is_on_rack) {
+    if (is_on_rack) {
         return nozzle.m_nozzle_id + 0x10;
     }
     return nozzle.m_nozzle_id;
@@ -1050,10 +1049,10 @@ void clear_wtm_firmware_info(Slic3r::MachineObject* obj) {
     }
 }
 
-Slic3r::DevFirmwareVersionInfo get_nozzle_firmware_info(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system) {
+Slic3r::DevFirmwareVersionInfo get_nozzle_firmware_info(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system, bool is_on_rack) {
     auto rack = get_nozzle_rack(system);
     if (!rack) return Slic3r::DevFirmwareVersionInfo();
-    if (rack->IsNozzleOnRack(nozzle.m_nozzle_id)) {
+    if (is_on_rack) {
         return rack->GetNozzleFirmwareInfo(nozzle.m_nozzle_id);
     } else {
         return rack->GetExtruderNozzleFirmwareInfo();

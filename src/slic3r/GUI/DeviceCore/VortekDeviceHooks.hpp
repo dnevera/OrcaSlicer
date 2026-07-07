@@ -55,7 +55,7 @@ std::string to_nozzle_flow_string(Slic3r::NozzleFlowType flow_type);
 wxString get_nozzle_type_str(const Slic3r::DevNozzle& nozzle);
 wxString get_nozzle_flow_type_str(const Slic3r::DevNozzle& nozzle);
 std::string get_nozzle_type_string(Slic3r::NozzleType type);
-Slic3r::DevFirmwareVersionInfo get_nozzle_firmware_info(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system);
+Slic3r::DevFirmwareVersionInfo get_nozzle_firmware_info(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system, bool is_on_rack = false);
 Slic3r::NozzleDiameterType get_nozzle_diameter_type(const Slic3r::DevNozzle& nozzle);
 std::optional<int> get_replace_nozzle_tar(const Slic3r::DevNozzleSystem* system);
 
@@ -141,11 +141,11 @@ void parse_device_state(Slic3r::MachineObject* obj, const nlohmann::json& device
 
 std::shared_ptr<Slic3r::VortekNozzleRack> get_or_create_nozzle_rack(Slic3r::MachineObject* obj);
 std::shared_ptr<Slic3r::VortekNozzleRack> get_nozzle_rack(const Slic3r::DevNozzleSystem* system);
-bool is_nozzle_on_rack_helper(const Slic3r::DevNozzleSystem* system, int nozzle_id);
+bool is_nozzle_on_rack_helper(const Slic3r::DevNozzleSystem* system, int nozzle_id, int raw_id = 0);
 bool contains_ext_nozzle(const Slic3r::DevNozzleSystem* system, int nozzle_id);
 std::vector<std::vector<std::vector<float>>> get_full_flush_matrix_helper(const Slic3r::PresetBundle* preset_bundle);
 Slic3r::DevNozzle get_nozzle_by_pos_id(const Slic3r::DevNozzleSystem* system, int pos_id);
-int get_nozzle_pos_id(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system);
+int get_nozzle_pos_id(const Slic3r::DevNozzle& nozzle, const Slic3r::DevNozzleSystem* system, bool is_on_rack = false);
 
 std::shared_ptr<Slic3r::VortekNozzleMappingCtrl> get_or_create_nozzle_mapping(Slic3r::MachineObject* obj);
 std::shared_ptr<Slic3r::VortekNozzleMappingCtrl> get_nozzle_mapping(const Slic3r::MachineObject* obj);
