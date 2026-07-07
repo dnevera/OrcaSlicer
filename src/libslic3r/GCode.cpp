@@ -8,6 +8,7 @@
 #include "GCode.hpp"
 #include "GCode/VortekGCode.hpp"
 #include "VortekLog.hpp"
+#include "VortekPrintHooks.hpp"
 #include "Exception.hpp"
 #include "ExtrusionEntity.hpp"
 #include "EdgeGrid.hpp"
@@ -3673,8 +3674,15 @@ void GCode::check_placeholder_parser_failed()
 
 size_t GCode::cur_extruder_index() const
 {
-    //TODO: check if the function is duplicated
-    //just return m_writer.filament()->extruder_id()
+    // H2C Vortek: for Hybrid carousel mode, delegate to nozzle-variant-aware index
+    // so that NOZZLE_CONFIG(outer_wall_speed) and all print_options_with_variant correctly
+    // index by HF vs Standard variant, not just physical extruder (0/1).
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp:1350 – NOZZLE_CONFIG via get_nozzle_config_index
+    // Reference to BBS: BambuStudio/src/libslic3r/Print.cpp:1158 – get_nozzle_config_index
+    if (m_print && m_writer.filament() && ::Vortek::is_h2c_printer(*m_print)) {
+        return (size_t)::Vortek::PrintHooks::get_nozzle_config_index_for_gcode(
+            *m_print, (int)m_writer.filament()->id(), (int)m_layer_index);
+    }
     return get_extruder_id(m_writer.filament()->id());
 }
 
@@ -6595,9 +6603,26 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             }
         } else if (path.role() == erExternalPerimeter) {
             speed = NOZZLE_CONFIG(outer_wall_speed);
+            // H2C DIAG: log which extruder_index and speed was chosen (once per session)
+            {
+                static std::atomic<int> _h2c_ows_log_count{0};
+                if (_h2c_ows_log_count.fetch_add(1) < 5) {
+                    size_t ext_idx = cur_extruder_index();
+                    size_t fil_id  = m_writer.filament() ? m_writer.filament()->id() : 999;
+                    size_t ows_size = m_config.outer_wall_speed.values.size();
+                    std::string ows_all;
+                    for (double v : m_config.outer_wall_speed.values) ows_all += std::to_string((int)v) + ",";
+                    BOOST_LOG_TRIVIAL(warning) << "[Vortek] [warn] GCode::extrude_path outer_wall_speed:"
+                        << " filament_id=" << fil_id
+                        << " cur_extruder_index=" << ext_idx
+                        << " outer_wall_speed[" << ext_idx << "]=" << (int)speed
+                        << " full_vector=[" << ows_all << "] size=" << ows_size;
+                }
+            }
             if (sloped) {
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(speed));
             }
+
         } 
         else if(path.role() == erInternalBridgeInfill) {
             speed = m_config.get_abs_value_at("internal_bridge_speed", cur_extruder_index());

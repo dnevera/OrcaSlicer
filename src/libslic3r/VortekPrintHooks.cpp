@@ -810,6 +810,15 @@ void PrintHooks::compute_vortek_derived_maps(
         int idx = temp_full_config.get_index_for_extruder(
             f_maps[index], "print_extruder_id", extruder_type, nozzle_volume_type, "print_extruder_variant");
         out_filament_map_2[index] = (idx >= 0) ? idx : (f_maps[index] - 1);
+
+        VORTEK_LOG(warn, "compute_vortek_derived_maps: filament=" << index
+                   << " f_map(1-based)=" << f_maps[index]
+                   << " extruder_type=" << (int)extruder_type
+                   << " nozzle_vol_type=" << (int)nozzle_volume_type
+                   << " (0=Std,1=HF,2=Hybrid)"
+                   << " get_index_for_extruder=" << idx
+                   << " → filament_map_2=" << out_filament_map_2[index]
+                   << "  (outer_wall_speed[" << out_filament_map_2[index] << "] will be used)");
     }
 
     // 3. Read physical_extruder_map from printer preset (hardware property, not dependent on filament mapping mode)
@@ -855,9 +864,20 @@ void PrintHooks::silent_update_derived_maps(
         opt->values = computed_map_2;
     }
 
+    {
+        std::string map2_str, phys_str;
+        for (int v : computed_map_2)      map2_str  += std::to_string(v) + ",";
+        for (int v : calculated_physical_map) phys_str += std::to_string(v) + ",";
+        VORTEK_LOG(warn, "silent_update_derived_maps: filament_map_2=[" << map2_str
+                   << "] physical_extruder_map=[" << phys_str << "]"
+                   << "  (filament_map_2[0] is the print_extruder_variant index for filament 0"
+                   << " — 0=Std slot, 1=HF slot → outer_wall_speed[index] will be used)");
+    }
+
     // Note: physical_extruder_map is NOT updated here — it is a hardware property
     // from the printer preset (fdm_bbl_3dp_002_common.json) and must remain constant.
     // Reference to BBS: BambuStudio always uses preset physical_extruder_map=[1,0] regardless
+
     // of filament mapping mode (auto/manual).
 }
 
@@ -1013,6 +1033,225 @@ bool PrintHooks::apply_h2c_variant_overrides(
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PrintHooks::expand_variant_index_h2c  (public static)
+//
+// Hook called from DynamicPrintConfig::update_values_to_printer_extruders.
+// For H2C Hybrid carousel: reads extruder_variant_list from printer_config,
+// rebuilds variant_index to one entry per (extruder × sub-variant).
+//
+// Example for H2C (2 extruders, both Hybrid with Standard+High Flow):
+//   Before: variant_index = [idx_L-Std, idx_R-Std]   (size=2, Hybrid→fallback to Std)
+//   After:  variant_index = [idx_L-Std, idx_L-HF, idx_R-Std, idx_R-HF]  (size=4)
+//
+// The caller then uses variant_index.size() as the output vector size, so
+// outer_wall_speed (and ALL print_options_with_variant) get 4 values automatically.
+//
+// Non-H2C printers (no Hybrid extruder): no-op — variant_index unchanged.
+// Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp – extend_extruder_variant
+// ─────────────────────────────────────────────────────────────────────────────
+void PrintHooks::expand_variant_index_h2c(
+    const Slic3r::DynamicPrintConfig& printer_config,
+    std::vector<int>& variant_index,
+    int extruder_count)
+{
+    // Only H2C printers
+    if (!Vortek::is_h2c_printer(printer_config))
+        return;
+
+    // extruder_variant_list defines the HARDWARE slot layout — independent of
+    // the user's current nozzle_volume_type selection.
+    // If the printer supports [Standard, High Flow] on both extruders,
+    // we always produce 4 slots: [L-Std, L-HF, R-Std, R-HF].
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp – extend_extruder_variant
+    auto* evl = printer_config.option<Slic3r::ConfigOptionStrings>("extruder_variant_list");
+    if (!evl || evl->values.empty())
+        return;
+
+    // Count total slots across all extruders
+    int total_slots = 0;
+    for (int e = 0; e < extruder_count; ++e) {
+        if (e < (int)evl->values.size()) {
+            std::vector<std::string> sv;
+            boost::split(sv, evl->values[e], boost::is_any_of(","));
+            for (auto& s : sv) { boost::trim(s); if (!s.empty()) ++total_slots; }
+        } else {
+            ++total_slots;
+        }
+    }
+    if (total_slots <= extruder_count)
+        return; // nothing to expand
+
+    // Build variant_index: one slot per sub-variant per extruder
+    std::vector<int> new_vi;
+    new_vi.reserve(total_slots);
+    int slot = 0;
+    for (int e = 0; e < extruder_count; ++e) {
+        if (e < (int)evl->values.size()) {
+            std::vector<std::string> sub_variants;
+            boost::split(sub_variants, evl->values[e], boost::is_any_of(","));
+            for (auto& sv : sub_variants) {
+                boost::trim(sv);
+                if (sv.empty()) continue;
+                new_vi.push_back(slot++);
+            }
+        } else {
+            new_vi.push_back(slot++);
+        }
+    }
+
+    std::string s;
+    for (int v : new_vi) s += std::to_string(v) + ",";
+    VORTEK_LOG(warn, "expand_variant_index_h2c: variant_index expanded to [" << s << "] size=" << new_vi.size());
+    variant_index = std::move(new_vi);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PrintHooks::expand_print_extruder_variants_h2c  (public static)
+//
+// After full_fff_config(), print_extruder_variant contains only one slot per
+// physical extruder: [Std@Left, Std@Right] (size=2).
+// This means outer_wall_speed and all print_options_with_variant get only 2 values,
+// making HF variant speed unreachable.
+//
+// Fix: rebuild print_extruder_variant/print_extruder_id from scratch using
+// extruder_variant_list (the authoritative source of all variants per extruder).
+// For H2C this is always ["Standard,High Flow", "Standard,High Flow"],
+// so we ALWAYS produce 4 slots:
+//   [0] Std@Left(1), [1] HF@Left(1), [2] Std@Right(2), [3] HF@Right(2)
+//
+// Then re-apply update_values_to_printer_extruders → outer_wall_speed size=4.
+// No dependency on filament_volume_map or which filaments are currently HF.
+//
+// Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:120
+//   out.update_values_to_printer_extruders(out, print_options_with_variant,
+//                                          "print_extruder_id", "print_extruder_variant");
+// Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp – extruder_variant_list parsing
+// ─────────────────────────────────────────────────────────────────────────────
+void PrintHooks::expand_print_extruder_variants_h2c(
+    Slic3r::DynamicPrintConfig& cfg)
+{
+    // Read extruder_variant_list — authoritative list of variants per extruder.
+    // Each entry is comma-separated variants for that extruder, e.g. "Standard,High Flow"
+    auto* evl = cfg.option<Slic3r::ConfigOptionStrings>("extruder_variant_list");
+    if (!evl || evl->values.empty()) {
+        VORTEK_LOG(warn, "expand_print_extruder_variants_h2c: extruder_variant_list absent — skip");
+        return;
+    }
+
+    // Build complete print_extruder_variant and print_extruder_id from extruder_variant_list
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp extend_extruder_variant
+    std::vector<std::string> new_pev;
+    std::vector<int>         new_pei;
+
+    for (size_t ext_idx = 0; ext_idx < evl->values.size(); ++ext_idx) {
+        const int ext_id_1based = (int)ext_idx + 1; // 1-based physical extruder id
+        // Split by comma
+        std::vector<std::string> variants;
+        boost::split(variants, evl->values[ext_idx], boost::is_any_of(","));
+        for (auto& raw_variant : variants) {
+            boost::trim(raw_variant);
+            if (raw_variant.empty()) continue;
+            // Map "Standard" / "High Flow" → canonical variant string used by get_extruder_variant_string
+            // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp – s_keys_names_NozzleVolumeType
+            Slic3r::NozzleVolumeType nvt = Slic3r::nvtStandard;
+            if (raw_variant == "High Flow" || raw_variant == "Direct Drive High Flow")
+                nvt = Slic3r::nvtHighFlow;
+            const std::string canonical = Slic3r::get_extruder_variant_string(Slic3r::etDirectDrive, nvt);
+            new_pev.push_back(canonical);
+            new_pei.push_back(ext_id_1based);
+        }
+    }
+
+    if (new_pev.empty()) {
+        VORTEK_LOG(warn, "expand_print_extruder_variants_h2c: parsed no variants from extruder_variant_list");
+        return;
+    }
+
+    // Idempotency: if print_extruder_variant already matches, skip the set_key_value but
+    // still re-run update_values_to_printer_extruders to pick up fresh user values.
+    auto* pev = cfg.option<Slic3r::ConfigOptionStrings>("print_extruder_variant");
+    if (!pev || pev->values != new_pev) {
+        cfg.set_key_value("print_extruder_variant", new Slic3r::ConfigOptionStrings(new_pev));
+        cfg.set_key_value("print_extruder_id",      new Slic3r::ConfigOptionInts(new_pei));
+        {
+            std::string pev_str, pei_str;
+            for (auto& s : new_pev) pev_str += s + "|";
+            for (int v : new_pei) pei_str += std::to_string(v) + ",";
+            VORTEK_LOG(warn, "expand_print_extruder_variants_h2c: rebuilt print_extruder_variant=["
+                       << pev_str << "] print_extruder_id=[" << pei_str << "] size=" << new_pev.size());
+        }
+    } else {
+        VORTEK_LOG(warn, "expand_print_extruder_variants_h2c: print_extruder_variant already correct size="
+                   << pev->values.size() << ", re-applying update_values only");
+    }
+
+    // Always re-apply all print_options_with_variant (outer_wall_speed, inner_wall_speed, etc.)
+    // so that fresh user values are distributed across all 4 variant slots.
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:120
+    cfg.update_values_to_printer_extruders(
+        cfg, Slic3r::print_options_with_variant,
+        "print_extruder_id", "print_extruder_variant");
+
+    if (auto* ows = cfg.option<Slic3r::ConfigOptionFloats>("outer_wall_speed")) {
+        std::string s;
+        for (double v : ows->values) s += std::to_string((int)v) + ",";
+        VORTEK_LOG(warn, "expand_print_extruder_variants_h2c: outer_wall_speed=[" << s << "] size=" << ows->values.size());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get_nozzle_config_index_for_gcode
+//
+// BBS-pattern: returns the process-variant index for NOZZLE_CONFIG() lookups.
+// For H2C Hybrid: resolves extruder_type + nozzle_volume_type via LayeredNozzleGroupResult,
+// then finds the matching index in print_extruder_variant (which must contain the HF slot
+// after expand_print_extruder_variants_for_h2c).
+// For non-H2C: returns physical extruder index (filament_map[i]-1), same as cur_extruder_index().
+//
+// Reference to BBS: BambuStudio/src/libslic3r/Print.cpp:1158  – get_nozzle_config_index
+// Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp:551 – get_config_index_base
+// ─────────────────────────────────────────────────────────────────────────────
+int PrintHooks::get_nozzle_config_index_for_gcode(
+    const Slic3r::Print& print,
+    int filament_id,
+    int layer_id)
+{
+    // Non-H2C: physical extruder index (unchanged behaviour)
+    if (!is_h2c_printer(print))
+        return (int)print.get_extruder_id(filament_id);
+
+    // H2C: use LayeredNozzleGroupResult for nozzle variant resolution
+    auto group_result = print.get_layered_nozzle_group_result();
+    if (!group_result)
+        return (int)print.get_extruder_id(filament_id);
+
+    auto nozzle_info = group_result->get_nozzle_for_filament(filament_id, layer_id);
+    if (!nozzle_info.has_value())
+        return (int)print.get_extruder_id(filament_id);
+
+    auto extruder_type      = Slic3r::ExtruderType(print.config().extruder_type.get_at(nozzle_info->extruder_id));
+    auto nozzle_volume_type = nozzle_info->volume_type;
+
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp:551 – get_config_index_base
+    // Inline implementation (get_config_index_base is not yet in Orca).
+    // print_extruder_variant/id are not in typed PrintConfig — read from full_print_config().
+    // target_id is 1-based PHYSICAL extruder id (not filament_id!), because
+    // update_values_to_printer_extruders fills print_extruder_id with e_index+1 (physical extruder).
+    const std::string target_variant = Slic3r::get_extruder_variant_string(extruder_type, nozzle_volume_type);
+    const auto* pev = print.full_print_config().option<Slic3r::ConfigOptionStrings>("print_extruder_variant");
+    const auto* pei = print.full_print_config().option<Slic3r::ConfigOptionInts>("print_extruder_id");
+    const int   target_id = nozzle_info->extruder_id + 1; // 0-based → 1-based physical extruder
+    if (pev && pei && pev->values.size() == pei->values.size()) {
+        for (int i = 0; i < (int)pev->values.size(); ++i) {
+            if (pev->values[i] == target_variant && pei->values[i] == target_id)
+                return i;
+        }
+    }
+
+    // Fallback: physical extruder (same as before fix)
+    return (int)print.get_extruder_id(filament_id);
+}
 
 
 void PrintHooks::apply_filament_extruder_overrides_h2c(

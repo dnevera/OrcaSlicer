@@ -134,6 +134,50 @@ public:
         int filament_nvt
     );
 
+    /**
+     * @brief Returns the process-variant config index for a given filament in the current layer.
+     *
+     * For H2C Hybrid printers: uses LayeredNozzleGroupResult to determine extruder_type +
+     * nozzle_volume_type for the filament, then finds the matching index in print_extruder_variant.
+     * This allows NOZZLE_CONFIG() to correctly index outer_wall_speed and other
+     * print_options_with_variant based on nozzle variant (HF vs Standard), not just physical extruder.
+     *
+     * For non-H2C printers: falls back to physical extruder index (filament_map[i]-1).
+     *
+     * Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp:1350 – NOZZLE_CONFIG macro
+     * Reference to BBS: BambuStudio/src/libslic3r/Print.cpp:1158 – get_nozzle_config_index
+     */
+    static int get_nozzle_config_index_for_gcode(
+        const Slic3r::Print& print,
+        int filament_id,
+        int layer_id
+    );
+
+    /**
+     * @brief Expands print_extruder_variant to include HF slot for H2C Hybrid mode,
+     * Sets print_extruder_variant/id to cover ALL variants per extruder (e.g. Std+HF per Hybrid extruder).
+     * Must be called AFTER apply_filament_extruder_overrides_h2c in full_fff_config.
+     * Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:120
+     */
+    static void expand_print_extruder_variants_h2c(
+        Slic3r::DynamicPrintConfig& cfg
+    );
+
+    /**
+     * Hook called from DynamicPrintConfig::update_values_to_printer_extruders (PrintConfig.cpp).
+     * For H2C Hybrid carousel: expands variant_index to cover all sub-variants of each Hybrid
+     * extruder (Std + HF), producing a 4-element vector instead of 2.
+     * All print_options_with_variant (outer_wall_speed etc.) are then expanded automatically
+     * by the standard write loop which uses variant_index.size() as output size.
+     * Non-H2C printers: no-op.
+     * Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp – extend_extruder_variant logic
+     */
+    static void expand_variant_index_h2c(
+        const Slic3r::DynamicPrintConfig& printer_config,
+        std::vector<int>& variant_index,
+        int extruder_count
+    );
+
 private:
     static void update_filament_config_values_for_multiple_extruders(
         Slic3r::DynamicPrintConfig &printer_config,

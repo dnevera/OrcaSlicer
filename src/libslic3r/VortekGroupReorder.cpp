@@ -223,11 +223,16 @@ void GroupReorder::handle_manual_mode_reorder(
         return;
     }
 
-    // Read the user's volume map (Std/HF assignment) saved in print config.
-    // Pass it explicitly so VortekPrintHooks Step 2 does NOT auto-assign via VORTEK_DEBUG_HF_NOZZLE_OVERRIDE,
-    // respecting whatever the user selected in the Filament Grouping dialog.
+    // Read the user's volume map from m_full_print_config (not m_config).
+    // m_full_print_config is updated by apply_h2c_variant_overrides → ensure_nozzle_group_result
+    // BEFORE handle_manual_mode_reorder is called, and already reflects the plate_config value
+    // written by sync_machine_nozzle_inventory_to_preset (e.g. [1,0,0,0,0] after HF inventory sync).
+    // m_config (print->config()) gets updated only at end of update_filament_maps_to_config Step 4,
+    // which runs AFTER this call — reading it here would always return the stale previous value.
     // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map read
-    std::vector<int> saved_volume_maps = print->config().filament_volume_map.values;
+    std::vector<int> saved_volume_maps;
+    if (auto* opt = print->full_print_config().option<Slic3r::ConfigOptionInts>("filament_volume_map"))
+        saved_volume_maps = opt->values;
     {
         std::string vm_str;
         for (int v : saved_volume_maps) vm_str += std::to_string(v) + ",";

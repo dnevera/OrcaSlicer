@@ -9784,6 +9784,10 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                 }
             }
         }
+        // Vortek H2C hook: expand variant_index for Hybrid carousel (no-op for other printers).
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp - extend_extruder_variant
+        ::Vortek::PrintHooks::expand_variant_index_h2c(printer_config, variant_index, extruder_count);
+        const int variant_count = (int)variant_index.size(); // equals extruder_count for non-H2C
 
         const ConfigDef       *config_def     = this->def();
         if (!config_def) {
@@ -9805,8 +9809,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionStrings * opt = this->option<ConfigOptionStrings>(key);
                     std::vector<std::string> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9819,8 +9823,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionInts * opt = this->option<ConfigOptionInts>(key);
                     std::vector<int> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9833,8 +9837,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionFloats * opt = this->option<ConfigOptionFloats>(key);
                     std::vector<double> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9847,8 +9851,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionPercents * opt = this->option<ConfigOptionPercents>(key);
                     std::vector<double> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9861,8 +9865,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionFloatsOrPercents * opt = this->option<ConfigOptionFloatsOrPercents>(key);
                     std::vector<FloatOrPercent> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9875,8 +9879,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionBools * opt = this->option<ConfigOptionBools>(key);
                     std::vector<unsigned char> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);
@@ -9889,8 +9893,8 @@ std::vector<int> DynamicPrintConfig::update_values_to_printer_extruders(DynamicP
                     ConfigOptionEnumsGeneric * opt = this->option<ConfigOptionEnumsGeneric>(key);
                     std::vector<int> new_values;
 
-                    new_values.resize(extruder_count * stride);
-                    for (int e_index = 0; e_index < extruder_count; e_index++)
+                    new_values.resize(variant_count * stride);
+                    for (int e_index = 0; e_index < variant_count; e_index++)
                     {
                         for (unsigned int i = 0; i < stride; i++)
                             new_values[e_index*stride + i] = opt->get_at(variant_index[e_index]*stride + i);

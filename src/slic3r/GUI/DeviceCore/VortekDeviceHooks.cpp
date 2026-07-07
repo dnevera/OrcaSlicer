@@ -562,6 +562,7 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                 auto f_maps = plate->get_filament_maps();
                 auto f_volume_maps = plate->get_filament_volume_maps();
                 if (f_maps.empty()) continue;
+
                 // Resize volume map to match filament count if needed
                 if ((int)f_volume_maps.size() < (int)f_maps.size())
                     f_volume_maps.resize(f_maps.size(), static_cast<int>(Slic3r::nvtStandard));
@@ -583,33 +584,68 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
 
                 int hf_count = hf_counts[right_eid]; // from updated extruder_nozzle_stat
 
+                // Determine if this plate uses Manual filament assignment.
+                // In Manual/NozzleManual mode the user has explicitly assigned filaments to nozzle slots —
+                // we must preserve those choices and NOT overwrite them with auto-computed values.
+                // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:get_filament_map_mode
+                int plate_map_mode = static_cast<int>(plate->get_filament_map_mode());
+                bool is_manual_mode = (plate_map_mode == static_cast<int>(Slic3r::fmmManual) ||
+                                       plate_map_mode == static_cast<int>(Slic3r::fmmNozzleManual));
+
                 for (int i = 0; i < (int)right_indices.size(); ++i) {
                     int fidx = right_indices[i];
                     int vol;
                     if (right_nvt == Slic3r::nvtHighFlow) {
-                        // Pure HF mode: all right filaments = HF regardless of stats
+                        // Pure HF mode: all right filaments = HF regardless of stats or user choice
                         vol = static_cast<int>(Slic3r::nvtHighFlow);
                     } else if (right_nvt == Slic3r::nvtStandard) {
-                        // Pure Std mode: all right filaments = Std regardless of stats
+                        // Pure Std mode: all right filaments = Std regardless of stats or user choice
                         vol = static_cast<int>(Slic3r::nvtStandard);
                     } else {
-                        // Hybrid mode: assign based on hf_count from stats
-                        // Debug: FIRST hf_count → HF; Production: LAST hf_count → HF
+                        // Hybrid mode: compute auto-assigned value from hf_count.
+                        // Debug: FIRST hf_count Right filaments → HF; Production: LAST hf_count → HF
+                        int auto_vol;
                         if (VORTEK_DEBUG_HF_NOZZLE_OVERRIDE)
-                            vol = (hf_count > 0 && i < hf_count) ? static_cast<int>(Slic3r::nvtHighFlow)
-                                                                  : static_cast<int>(Slic3r::nvtStandard);
+                            auto_vol = (hf_count > 0 && i < hf_count)
+                                         ? static_cast<int>(Slic3r::nvtHighFlow)
+                                         : static_cast<int>(Slic3r::nvtStandard);
                         else
-                            vol = (hf_count > 0 && i >= (int)right_indices.size() - hf_count)
-                                    ? static_cast<int>(Slic3r::nvtHighFlow)
-                                    : static_cast<int>(Slic3r::nvtStandard);
+                            auto_vol = (hf_count > 0 && i >= (int)right_indices.size() - hf_count)
+                                         ? static_cast<int>(Slic3r::nvtHighFlow)
+                                         : static_cast<int>(Slic3r::nvtStandard);
+
+                        if (is_manual_mode && f_volume_maps[fidx] != 0) {
+                            // User explicitly assigned this filament (HF or Std) in FilamentMapDialog.
+                            // plate_config.filament_volume_map is the single source of truth in Manual mode.
+                            // Only invalidate if the requested HF nozzle no longer physically exists.
+                            // Reference: VortekDeviceHooks.cpp update_filament_volume_map
+                            if (f_volume_maps[fidx] == static_cast<int>(Slic3r::nvtHighFlow) && hf_count == 0) {
+                                // HF nozzle physically removed from rack — force reset to Standard
+                                vol = static_cast<int>(Slic3r::nvtStandard);
+                                VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
+                                           << " filament=" << fidx
+                                           << " user HF choice INVALIDATED (no HF nozzle in rack)");
+                            } else {
+                                // User choice is physically valid — preserve it unchanged
+                                vol = f_volume_maps[fidx];
+                                VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
+                                           << " filament=" << fidx
+                                           << " → " << (vol == 1 ? "HighFlow" : "Standard")
+                                           << " (Manual mode: user choice preserved)");
+                            }
+                        } else {
+                            // Auto mode OR Manual with unset entry (value==0):
+                            // apply auto-assignment based on nozzle_stats hf_count
+                            vol = auto_vol;
+                            VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
+                                       << " filament=" << fidx << " right_pos=" << i
+                                       << " → " << (vol == 1 ? "HighFlow" : "Standard")
+                                       << " (mode=" << (right_nvt == Slic3r::nvtHighFlow ? "pureHF"
+                                                       : right_nvt == Slic3r::nvtStandard ? "pureStd" : "Hybrid")
+                                       << ", hf_count=" << hf_count << ", auto-assign)");
+                        }
                     }
                     f_volume_maps[fidx] = vol;
-                    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
-                               << " filament=" << fidx << " right_pos=" << i
-                               << " → " << (vol == 1 ? "HighFlow" : "Standard")
-                               << " (mode=" << (right_nvt == Slic3r::nvtHighFlow ? "pureHF"
-                                              : right_nvt == Slic3r::nvtStandard  ? "pureStd" : "Hybrid")
-                               << ", hf_count=" << hf_count << ")");
                 }
 
                 plate->set_filament_volume_maps(f_volume_maps);
@@ -618,6 +654,7 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
             plater->set_plater_dirty(true);
             VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: volume_map rebuilt on all plates after nozzle swap");
         }
+
 
 
     } else {

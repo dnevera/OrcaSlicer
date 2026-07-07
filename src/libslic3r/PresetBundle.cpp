@@ -4058,6 +4058,12 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
                 auto* opt_vm = out.option<ConfigOptionInts>("filament_volume_map");
                 std::vector<int> volume_maps = opt_vm ? opt_vm->values : std::vector<int>();
                 Vortek::PrintHooks::apply_filament_extruder_overrides_h2c(out, filament_temp_configs, filament_maps, apply_extruder, volume_maps);
+                // H2C Hybrid: expand print_extruder_variant to include HF slot and re-apply
+                // outer_wall_speed (and all print_options_with_variant) with HF values.
+                // Must be called AFTER apply_filament_extruder_overrides_h2c (which sets filament_volume_map)
+                // and AFTER update_values_to_printer_extruders (line ~3947) has already run for process params.
+                // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:120
+                Vortek::PrintHooks::expand_print_extruder_variants_h2c(out);
             } else {
                 for (size_t i = 0; i < num_filaments; ++i) {
                     filament_temp_configs[i].update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[i]);
