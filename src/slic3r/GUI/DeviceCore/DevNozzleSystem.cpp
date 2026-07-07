@@ -116,9 +116,9 @@ void DevNozzleSystemParser::ParseV1_0(const nlohmann::json& nozzletype_json,
     }
 
     Vortek::DeviceHooks::process_nozzle_placement(system, nozzle, 0);
-    if (!Vortek::DeviceHooks::is_nozzle_on_rack_helper(system, 0)) {
-        system->m_nozzles[nozzle.m_nozzle_id] = nozzle;
-    }
+    // raw_id=0 → is_on_rack=0 (head nozzle, always goes to m_nozzles)
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp:702
+    system->m_nozzles[nozzle.m_nozzle_id] = nozzle;
 }
 
 
@@ -147,10 +147,13 @@ void DevNozzleSystemParser::ParseV2_0(const json& nozzle_json, DevNozzleSystem* 
             nozzle_obj.m_nozzle_print_time = njon["p_t"].get<int>();
         }
         
-        // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp:769-776
+        //   BBS uses is_on_rack bit from raw_id directly to route nozzles to rack vs head storage.
+        //   Using is_on_rack from raw_id avoids ID collision when head and rack nozzles share physical_id.
         Vortek::DeviceHooks::process_nozzle_placement(system, nozzle_obj, raw_id);
         Vortek::DeviceHooks::parse_nozzle_filament(system, nozzle_obj.m_nozzle_id, njon);
-        if (!Vortek::DeviceHooks::is_nozzle_on_rack_helper(system, nozzle_obj.m_nozzle_id)) {
+        int is_on_rack = DevUtil::get_hex_bits(raw_id, 1);
+        if (is_on_rack != 1) {
             system->m_nozzles[nozzle_obj.m_nozzle_id] = nozzle_obj;
         }
     }

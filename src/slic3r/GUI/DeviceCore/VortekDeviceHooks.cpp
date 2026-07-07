@@ -313,18 +313,25 @@ void process_nozzle_placement(
     int is_on_rack = Slic3r::DevUtil::get_hex_bits(raw_id, 1);
 
     nozzle_obj.m_nozzle_id = physical_id;
-    auto rack = get_nozzle_rack(system);
-    if (rack) {
-        rack->SetNozzleOnRack(physical_id, is_on_rack == 1);
-    }
 
     if (is_on_rack == 1) {
+        // Rack nozzle: add to rack storage. AddRackNozzle() internally calls
+        // SetNozzleOnRack(id, true), so no separate SetNozzleOnRack call needed.
+        // IMPORTANT: Do NOT call SetNozzleOnRack(id, false) for head nozzles —
+        // head and rack nozzles can share the same physical_id (e.g. when a nozzle
+        // is picked from slot 1 and a new nozzle is placed back in slot 1).
+        // Calling SetNozzleOnRack(id, false) for the head nozzle would erase the
+        // rack nozzle's on_rack flag, causing it to be skipped in inventory counting.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceCore/DevNozzleSystem.cpp:769-776
+        //   BBS stores rack nozzles in m_nozzle_rack and head nozzles in m_ext_nozzles
+        //   (separate containers, no ID collision).
+        auto rack = get_nozzle_rack(system);
         if (rack) {
             rack->AddRackNozzle(nozzle_obj);
             VORTEK_LOG(warn, "process_nozzle_placement: added nozzle id=" << physical_id << " to rack");
         }
     } else {
-        VORTEK_LOG(warn, "process_nozzle_placement: added active head nozzle id=" << physical_id);
+        VORTEK_LOG(warn, "process_nozzle_placement: active head nozzle id=" << physical_id);
     }
 }
 
