@@ -12,6 +12,8 @@
 #include <set>
 #include <unordered_map>
 
+
+
 namespace Vortek {
 
 bool is_h2c_printer(const Slic3r::Print& print) {
@@ -268,6 +270,29 @@ void PrintHooks::update_filament_maps_to_config(
     // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp – on_printer_model_change
     // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp   – get_extruder_nozzle_stats
     std::vector<int> final_volume_maps = f_volume_maps;
+
+    // When called from the single-arg path (Print.cpp:3241), f_volume_maps is empty.
+    // Before falling back to auto-assignment, check if m_full_print_config already has a
+    // user-set volume_map (e.g. from manual filament→HF assignment in FilamentMapDialog).
+    // User assignment is saved to project_config → flows into m_full_print_config via Print::apply().
+    // Respecting it here is what makes manual binding persist through reslice.
+    // Only auto-assign if there is truly no existing map (empty) — all-zeros [0,0,...] from
+    // m_config means "never set", but a mix of 0 and 1 means user intentionally set some HF.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
+    if (final_volume_maps.empty() && !f_maps.empty()) {
+        // Try to recover from m_full_print_config (user assignment from dialog)
+        auto* existing_opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        if (existing_opt && !existing_opt->values.empty() && (int)existing_opt->values.size() == (int)f_maps.size()) {
+            bool has_hf = false;
+            for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
+            if (has_hf) {
+                // User has explicitly assigned some filaments to HF — preserve their choice.
+                final_volume_maps = existing_opt->values;
+                VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
+            }
+        }
+    }
+
     if (final_volume_maps.empty() && !f_maps.empty()) {
         auto opt_nozzle_volume_type = dynamic_cast<const Slic3r::ConfigOptionEnumsGeneric*>(
             print.m_ori_full_print_config.option("nozzle_volume_type"));
@@ -366,7 +391,7 @@ void PrintHooks::update_filament_maps_to_config(
         std::vector<int> zero_based_filament_map = f_maps;
         std::transform(zero_based_filament_map.begin(), zero_based_filament_map.end(), zero_based_filament_map.begin(), [](int v) { return v - 1; });
 
-        auto nozzle_result = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+        auto nozzle_result = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_config(
             used_filaments,
             zero_based_filament_map,
             final_volume_maps,
@@ -986,6 +1011,75 @@ bool PrintHooks::apply_h2c_variant_overrides(
 
     VORTEK_LOG(warn, "apply_h2c_variant_overrides: successfully applied H2C resolved variants to new_full_config");
     return true;
+}
+
+
+
+void PrintHooks::apply_filament_extruder_overrides_h2c(
+    Slic3r::DynamicPrintConfig& out,
+    std::vector<Slic3r::DynamicPrintConfig>& filament_temp_configs,
+    const std::vector<int>& filament_maps,
+    bool apply_extruder,
+    const std::vector<int>& filament_volume_maps)
+{
+    if (auto* opt = out.option<Slic3r::ConfigOptionInts>("filament_volume_map", true)) {
+        opt->values = filament_volume_maps;
+    }
+
+    auto* opt_nvt = out.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type", true);
+    if (!opt_nvt) return;
+    auto original_values = opt_nvt->values;
+
+    for (size_t i = 0; i < filament_temp_configs.size(); ++i) {
+        if (apply_extruder) {
+            int ext_idx = filament_maps[i] - 1;
+            if (ext_idx >= 0 && ext_idx < (int)original_values.size() && original_values[ext_idx] == Slic3r::nvtHybrid) {
+                int filament_nvt = (i < filament_volume_maps.size()) ? filament_volume_maps[i] : (int)Slic3r::nvtStandard;
+                opt_nvt->values[ext_idx] = filament_nvt;
+            }
+
+            filament_temp_configs[i].update_values_to_printer_extruders(
+                out,
+                Slic3r::filament_options_with_variant,
+                "",
+                "filament_extruder_variant",
+                1,
+                filament_maps[i]
+            );
+
+            opt_nvt->values = original_values;
+        }
+    }
+}
+
+void PrintHooks::apply_single_filament_extruder_override_h2c(
+    Slic3r::DynamicPrintConfig& out,
+    Slic3r::DynamicPrintConfig& filament_config,
+    int extruder_id,
+    bool apply_extruder,
+    int filament_nvt)
+{
+    if (apply_extruder) {
+        auto* opt_nvt = out.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type", true);
+        if (!opt_nvt) return;
+        auto original_values = opt_nvt->values;
+
+        int ext_idx = extruder_id - 1;
+        if (ext_idx >= 0 && ext_idx < (int)original_values.size() && original_values[ext_idx] == Slic3r::nvtHybrid) {
+            opt_nvt->values[ext_idx] = filament_nvt;
+        }
+
+        filament_config.update_values_to_printer_extruders(
+            out,
+            Slic3r::filament_options_with_variant,
+            "",
+            "filament_extruder_variant",
+            1,
+            extruder_id
+        );
+
+        opt_nvt->values = original_values;
+    }
 }
 
 } // namespace Vortek

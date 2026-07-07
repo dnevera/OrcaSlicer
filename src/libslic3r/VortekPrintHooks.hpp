@@ -118,6 +118,22 @@ public:
         Slic3r::DynamicPrintConfig& new_full_config
     );
 
+    static void apply_filament_extruder_overrides_h2c(
+        Slic3r::DynamicPrintConfig& out,
+        std::vector<Slic3r::DynamicPrintConfig>& filament_temp_configs,
+        const std::vector<int>& filament_maps,
+        bool apply_extruder,
+        const std::vector<int>& filament_volume_maps
+    );
+
+    static void apply_single_filament_extruder_override_h2c(
+        Slic3r::DynamicPrintConfig& out,
+        Slic3r::DynamicPrintConfig& filament_config,
+        int extruder_id,
+        bool apply_extruder,
+        int filament_nvt
+    );
+
 private:
     static void update_filament_config_values_for_multiple_extruders(
         Slic3r::DynamicPrintConfig &printer_config,

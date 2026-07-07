@@ -370,9 +370,13 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
         constexpr float kDiameterTol = 0.05f; // tolerance for float diameter comparison
 
         // Iterate through rack nozzles (all belong to Right extruder).
-        // Stats count ALL carousel nozzles by flow type, regardless of diameter.
-        // Diameter filtering happens at filament assignment level, not at inventory stats.
-        // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp – counts all rack nozzles
+        // Count ONLY nozzles matching the right extruder's preset diameter.
+        // The carousel may hold nozzles of mixed diameters (e.g. 0.2/0.4/0.6mm).
+        // Only 0.4mm nozzles are usable when preset is set to 0.4mm, so only those count
+        // toward Std/HF inventory. Otherwise std=5 when only 4×0.4mm are relevant.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1993 –
+        //   nozzle_diameters[extruder_id] used for target_type resolution
+        float right_preset_diam = (num_extruders > 1) ? preset_diameters[1] : preset_diameters[0];
         for (const auto& pair : nozzle_rack->GetRackNozzles()) {
             const auto& dev_nozzle = pair.second;
             // Skip slots that are not physically on the rack
@@ -383,6 +387,14 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
             if (is_nozzle_empty(dev_nozzle)) {
                 VORTEK_LOG(debug, "sync_machine_nozzle_inventory_to_preset: skipping empty rack slot id="
                            << dev_nozzle.m_nozzle_id);
+                continue;
+            }
+            // Filter by preset diameter: skip nozzles with different diameter
+            if (right_preset_diam > 0.0f && dev_nozzle.m_diameter > 0.0f &&
+                std::fabs(dev_nozzle.m_diameter - right_preset_diam) > kDiameterTol) {
+                VORTEK_LOG(debug, "sync_machine_nozzle_inventory_to_preset: skipping rack nozzle id="
+                           << dev_nozzle.m_nozzle_id << " diameter=" << dev_nozzle.m_diameter
+                           << " (preset=" << right_preset_diam << ", different diameter)");
                 continue;
             }
             // Every nozzle is Standard-capable (HF nozzle can be used as Standard).
@@ -398,17 +410,26 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
         }
 
         // Iterate through active toolhead nozzles.
-        // Left nozzle (id=0) is always counted here.
-        // Right active nozzle: skip if already counted in rack loop above
-        // (IsNozzleOnRack returns true for carousel nozzles even when in toolhead).
+        // Left nozzle (id=0) always counted for left extruder.
+        // Right active nozzle (slot 6 "In Use"): ALWAYS counted — it is physically in the toolhead,
+        // NOT in the rack. The rack loop counts carousel slots 1-5 (verified by IsNozzleOnRack).
+        // Slot 6 "In Use" is physically removed from the rack and therefore NOT in GetRackNozzles().
+        //
+        // IMPORTANT: Do NOT use IsNozzleOnRack(dev_nozzle.m_nozzle_id) to skip here.
+        // NozzleSystem extruder id (e.g. 1 = right extruder) and rack slot id (e.g. 1 = carousel slot 2)
+        // are DIFFERENT namespaces that happen to share integer values → false skip.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceManager.cpp – counts toolhead separately
         for (const auto& pair : nozzle_system->GetNozzles()) {
             const auto& dev_nozzle = pair.second;
-            // Left nozzle has physical id 0, right nozzle has physical id >= 1
             int eid_for_nozzle = (dev_nozzle.m_nozzle_id == 0) ? 0 : 1;
-            // Right active nozzle: skip if already counted in rack loop above.
-            if (eid_for_nozzle == 1 && nozzle_rack && nozzle_rack->IsNozzleOnRack(dev_nozzle.m_nozzle_id)) {
+
+            // Apply same diameter filter for active head nozzles
+            float preset_diam_for_eid = (eid_for_nozzle < (int)preset_diameters.size()) ? preset_diameters[eid_for_nozzle] : 0.0f;
+            if (preset_diam_for_eid > 0.0f && dev_nozzle.m_diameter > 0.0f &&
+                std::fabs(dev_nozzle.m_diameter - preset_diam_for_eid) > kDiameterTol) {
                 VORTEK_LOG(debug, "sync_machine_nozzle_inventory_to_preset: skipping active nozzle id="
-                           << dev_nozzle.m_nozzle_id << " (already counted in rack)");
+                           << dev_nozzle.m_nozzle_id << " diameter=" << dev_nozzle.m_diameter
+                           << " (preset=" << preset_diam_for_eid << ", different diameter)");
                 continue;
             }
             // Every nozzle is Standard-capable; HF nozzles also count as HighFlow.
@@ -428,22 +449,20 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                        << ", flow=" << (int)dev_nozzle.m_nozzle_flow);
         }
 
+        // NOTE: [H2C Debug] HF emulation is now done at DevNozzle object level in parse_device_state().
+        // parse_device_state() substitutes m_nozzle_flow = H_FLOW on the first N rack nozzle objects
+        // AFTER ParseRackInfo(). When we iterate rack nozzles here, they already report H_FLOW correctly.
+        // No counter patching needed — counts are derived naturally from the real nozzle objects.
 
 
-        // [H2C Debug] Override: add 1 HighFlow nozzle to Right extruder (carousel).
-        // This simulates a mixed carousel so we can test the Hybrid slicing pipeline
-        // without physical HF hardware. Standard count is NOT decremented — HF nozzle
-        // is still Standard-capable.
-        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp – on_printer_model_change
-        if (VORTEK_DEBUG_HF_NOZZLE_OVERRIDE) {
-            if (counts_right.count(Slic3r::nvtStandard) && counts_right[Slic3r::nvtStandard] > 0) {
-                counts_right[Slic3r::nvtHighFlow]++;
-                VORTEK_LOG(warn, "[DEBUG] HF override active: Right extruder carousel → "
-                           << counts_right[Slic3r::nvtStandard] << "x Standard + "
-                           << counts_right[Slic3r::nvtHighFlow] << "x HighFlow");
-            } else {
-                VORTEK_LOG(warn, "[DEBUG] HF override: no Standard slots found on Right extruder");
-            }
+        // Snapshot current stats BEFORE update to detect physical nozzle changes.
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceManager.cpp – nozzle change detection
+        std::map<int, std::pair<int,int>> stats_before; // eid → {std_count, hf_count}
+        for (int eid = 0; eid < num_extruders; ++eid) {
+            stats_before[eid] = {
+                stat.get_extruder_nozzle_count(eid, Slic3r::nvtStandard),
+                stat.get_extruder_nozzle_count(eid, Slic3r::nvtHighFlow)
+            };
         }
 
         // Update extruder nozzle stats for each extruder
@@ -472,6 +491,135 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                            << ", fallback to 1 default nozzle of type=" << (int)def_type);
             }
         }
+
+        // Detect physical nozzle change by comparing stats before/after.
+        // H2C carousel: right extruder stays Hybrid, but HF COUNT may change (swap nozzle).
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1977-2062
+        //   BBS calls set_extruder_volume_type() → update_filament_volume_map() on user Sync.
+        //   For H2C Hybrid carousel: type stays Hybrid, only HF count changes.
+        //   We rebuild the volume_map directly from new stats (no reslice trigger).
+        bool nozzle_inventory_changed = false;
+        bool stats_were_zero = true; // guard: skip "initialization" event (0→N on first poll)
+        for (int eid = 0; eid < num_extruders; ++eid) {
+            if (stats_before[eid].first != 0 || stats_before[eid].second != 0)
+                stats_were_zero = false;
+        }
+        for (int eid = 0; eid < num_extruders; ++eid) {
+            int new_std = stat.get_extruder_nozzle_count(eid, Slic3r::nvtStandard);
+            int new_hf  = stat.get_extruder_nozzle_count(eid, Slic3r::nvtHighFlow);
+            bool hf_changed  = (stats_before[eid].second != new_hf);
+            bool std_changed = (stats_before[eid].first  != new_std);
+            if (hf_changed || std_changed) {
+                if (!stats_were_zero) {
+                    // H2C Hybrid: volume_map slot assignment is driven ONLY by hf_count.
+                    // A pure std_count change (e.g. 3→4 as slot-6 "In Use" nozzle appears
+                    // in GetNozzles() on 2nd firmware ping) does NOT change HF assignments.
+                    // Only rebuild volume_map when hf_count actually changes.
+                    if (hf_changed) {
+                        nozzle_inventory_changed = true;
+                    }
+                    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: extruder=" << eid
+                               << " nozzle inventory CHANGED:"
+                               << " std " << stats_before[eid].first << "→" << new_std
+                               << ", hf " << stats_before[eid].second << "→" << new_hf
+                               << (hf_changed ? " [HF CHANGED → rebuild volume_map]"
+                                              : " [std-only change → NO rebuild]"));
+                } else {
+                    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: extruder=" << eid
+                               << " initial stats set (was zero): std=" << new_std << ", hf=" << new_hf
+                               << " — skipping change event (initialization, not a real nozzle swap)");
+                }
+            }
+        }
+
+        if (nozzle_inventory_changed && Slic3r::GUI::wxGetApp().plater()) {
+            // Physical nozzle swap detected. Rebuild volume_map from new HF counts
+            // using same logic as Step 2b (VortekPrintHooks.cpp:267-350).
+            // For H2C Hybrid: assign HF to first hf_count Right filaments, Std to rest.
+            // This is done DIRECTLY on the plate — no reslice triggered,
+            // just volume_map updated + slice invalidated.
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1577-1582
+            //   BBS does: update_filament_volume_map(extruder_id, new_type)
+            //   For H2C Hybrid carousel: we rebuild per-slot from HF count.
+            auto* plater = Slic3r::GUI::wxGetApp().plater();
+            auto& plate_list = plater->get_partplate_list();
+
+            // Get nozzle_volume_type per extruder from project_config.
+            // This determines the user-configured mode for each extruder (Standard/HighFlow/Hybrid).
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1577-1582
+            //   BBS: update_filament_volume_map(extruder_id, new_type) respects the type directly.
+            //   For H2C: nozzle_volume_type is the user-configured mode, not derived from stats.
+            auto* nvt_opt = preset_bundle.project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
+
+            // Get new HF counts per extruder from updated extruder_nozzle_stat
+            std::vector<int> hf_counts(num_extruders, 0);
+            for (int eid = 0; eid < num_extruders; ++eid)
+                hf_counts[eid] = stat.get_extruder_nozzle_count(eid, Slic3r::nvtHighFlow);
+
+            for (int idx = 0; idx < plate_list.get_plate_count(); ++idx) {
+                auto plate = plate_list.get_plate(idx);
+                if (!plate) continue;
+                auto f_maps = plate->get_filament_maps();
+                auto f_volume_maps = plate->get_filament_volume_maps();
+                if (f_maps.empty()) continue;
+                // Resize volume map to match filament count if needed
+                if ((int)f_volume_maps.size() < (int)f_maps.size())
+                    f_volume_maps.resize(f_maps.size(), static_cast<int>(Slic3r::nvtStandard));
+
+                // Collect Right extruder filament indices (1-based extruder id = 2 for Right)
+                std::vector<int> right_indices;
+                for (int i = 0; i < (int)f_maps.size(); ++i)
+                    if (f_maps[i] == 2) right_indices.push_back(i);
+
+                // Determine assignment strategy from nozzle_volume_type of Right extruder (eid=1)
+                // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:update_filament_volume_map
+                //   pure HF  → all right filaments = nvtHighFlow (all 1)
+                //   pure Std → all right filaments = nvtStandard  (all 0)
+                //   Hybrid   → assign HF to first/last hf_count right slots based on stats
+                int right_eid = (num_extruders > 1) ? 1 : 0;
+                Slic3r::NozzleVolumeType right_nvt = Slic3r::nvtStandard;
+                if (nvt_opt && right_eid < (int)nvt_opt->values.size())
+                    right_nvt = static_cast<Slic3r::NozzleVolumeType>(nvt_opt->values[right_eid]);
+
+                int hf_count = hf_counts[right_eid]; // from updated extruder_nozzle_stat
+
+                for (int i = 0; i < (int)right_indices.size(); ++i) {
+                    int fidx = right_indices[i];
+                    int vol;
+                    if (right_nvt == Slic3r::nvtHighFlow) {
+                        // Pure HF mode: all right filaments = HF regardless of stats
+                        vol = static_cast<int>(Slic3r::nvtHighFlow);
+                    } else if (right_nvt == Slic3r::nvtStandard) {
+                        // Pure Std mode: all right filaments = Std regardless of stats
+                        vol = static_cast<int>(Slic3r::nvtStandard);
+                    } else {
+                        // Hybrid mode: assign based on hf_count from stats
+                        // Debug: FIRST hf_count → HF; Production: LAST hf_count → HF
+                        if (VORTEK_DEBUG_HF_NOZZLE_OVERRIDE)
+                            vol = (hf_count > 0 && i < hf_count) ? static_cast<int>(Slic3r::nvtHighFlow)
+                                                                  : static_cast<int>(Slic3r::nvtStandard);
+                        else
+                            vol = (hf_count > 0 && i >= (int)right_indices.size() - hf_count)
+                                    ? static_cast<int>(Slic3r::nvtHighFlow)
+                                    : static_cast<int>(Slic3r::nvtStandard);
+                    }
+                    f_volume_maps[fidx] = vol;
+                    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
+                               << " filament=" << fidx << " right_pos=" << i
+                               << " → " << (vol == 1 ? "HighFlow" : "Standard")
+                               << " (mode=" << (right_nvt == Slic3r::nvtHighFlow ? "pureHF"
+                                              : right_nvt == Slic3r::nvtStandard  ? "pureStd" : "Hybrid")
+                               << ", hf_count=" << hf_count << ")");
+                }
+
+                plate->set_filament_volume_maps(f_volume_maps);
+                plate->update_slice_result_valid_state(false);
+            }
+            plater->set_plater_dirty(true);
+            VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: volume_map rebuilt on all plates after nozzle swap");
+        }
+
+
     } else {
         // Standard printer without nozzle rack
         // Map the active nozzle from m_nozzles map
@@ -495,39 +643,21 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
         }
     }
 
-    // Derive nozzle_volume_type from actual stats and write to project_config.
-    // If an extruder has both Standard AND HighFlow counts → nvtHybrid.
-    // If only HighFlow → nvtHighFlow. Otherwise → nvtStandard.
-    // This drives Step 2b in VortekPrintHooks (dynamic Hybrid resolution).
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1977 – Hybrid auto-detection
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp:7318 – set_extruder_volume_type
-    auto* nozzle_volume_type_opt = preset_bundle.project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
-    if (nozzle_volume_type_opt) {
-        for (int eid = 0; eid < num_extruders && eid < (int)nozzle_volume_type_opt->values.size(); ++eid) {
-            int std_count = stat.get_extruder_nozzle_count(eid, Slic3r::nvtStandard);
-            int hf_count  = stat.get_extruder_nozzle_count(eid, Slic3r::nvtHighFlow);
+    // NOTE: We do NOT write nozzle_volume_type to project_config here.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp:7318 – nozzle_volume_type is written
+    // ONLY on explicit user action (combo_flow onChange), never from device polling.
+    //
+    // extruder_nozzle_stats flows correctly into slicing via:
+    //   extruder_nozzle_stat (in-memory, updated above)
+    //     → full_config() PresetBundle.cpp:4187 → serializes to extruder_nozzle_stats config string
+    //     → VortekPrintHooks Step 2b reads extruder_nozzle_stats → resolves Hybrid per-filament
+    //
+    // nozzle_volume_type (= Hybrid for Right extruder on H2C) is set once at preset select
+    // via sync_extruder_nozzle_stats_on_preset_select(). Writing it here on every MQTT push
+    // triggers OnConfigChange → update_background_process() → reslice → filament_volume_map reset.
 
-            Slic3r::NozzleVolumeType resolved_type = Slic3r::nvtStandard;
-            if (Vortek::is_h2c_printer(&preset_bundle) && eid == 1) {
-                // H2C custom: Right carousel extruder always resolved as Hybrid
-                resolved_type = Slic3r::nvtHybrid;
-            } else {
-                if (hf_count > 0 && std_count > 0) {
-                    resolved_type = Slic3r::nvtHybrid;
-                } else if (hf_count > 0 && std_count == 0) {
-                    resolved_type = Slic3r::nvtHighFlow;
-                }
-            }
-
-            nozzle_volume_type_opt->values[eid] = static_cast<int>(resolved_type);
-            VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: extruder=" << eid
-                       << " → nozzle_volume_type=" << (resolved_type == Slic3r::nvtHybrid ? "Hybrid"
-                                                        : resolved_type == Slic3r::nvtHighFlow ? "HighFlow" : "Standard")
-                       << " (std_count=" << std_count << ", hf_count=" << hf_count << ")");
-        }
-    }
-
-    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: completed sync successfully");
+    VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: completed sync successfully"
+               " (extruder_nozzle_stat updated in-memory, nozzle_volume_type NOT touched)");
 }
 
 
@@ -553,10 +683,44 @@ void parse_device_state(Slic3r::MachineObject* obj, const nlohmann::json& device
         if (rack) {
             rack->ParseRackInfo(device_json["holder"]);
             // "holder" key present in firmware push ↔ physical rack is installed.
-            // bit-60 of fun is a BBS capability flag that H2C firmware may not set,
-            // so we cannot rely solely on set_support_nozzle_rack(…, get_flag_bits(fun,60)).
-            // Reference: DeviceManager.cpp parse_new_info, VortekDeviceHooks.cpp set_support_nozzle_rack.
             rack->SetSupported(true);
+
+            // [H2C Debug] HF Nozzle Emulation: substitute the first N rack nozzle objects
+            // to report NozzleFlowType::H_FLOW instead of S_FLOW.
+            // This is a REAL substitution at the DevNozzle level — ALL downstream code
+            // (Tab sync via GetNozzleFlowType, nozzle count loops, rebuild, etc.) will
+            // see genuine HF nozzles, not a counter patch.
+            // Only active when VORTEK_DEBUG_HF_NOZZLE_OVERRIDE is set.
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1993
+            //   obj->GetExtderSystem()->GetNozzleFlowType(extruder_id) → H_FLOW
+            if (VORTEK_DEBUG_HF_NOZZLE_OVERRIDE) {
+                int inject_count = VORTEK_DEBUG_HF_NOZZLE_OVERRIDE_COUNT;
+                int injected = 0;
+                // Collect non-empty rack nozzle IDs sorted ascending
+                std::vector<int> rack_ids;
+                for (const auto& pair : rack->GetRackNozzles()) {
+                    const auto& n = pair.second;
+                    if (n.m_nozzle_id >= 0 && n.m_diameter > 0.0f)
+                        rack_ids.push_back(pair.first);
+                }
+                std::sort(rack_ids.begin(), rack_ids.end());
+                for (int nid : rack_ids) {
+                    if (injected >= inject_count) break;
+                    // GetRackNozzles() returns const& — copy, modify, re-add via AddRackNozzle
+                    Slic3r::DevNozzle modified = rack->GetNozzle(nid); // copy
+                    if (modified.m_nozzle_flow != Slic3r::NozzleFlowType::H_FLOW) {
+                        modified.m_nozzle_flow = Slic3r::NozzleFlowType::H_FLOW;
+                        rack->AddRackNozzle(modified); // overwrites entry in m_rack_nozzles
+                        VORTEK_LOG(warn, "[DEBUG] parse_device_state: substituted rack nozzle id="
+                                   << nid << " → H_FLOW (emulating HF nozzle " << (injected+1)
+                                   << "/" << inject_count << ")");
+                        ++injected;
+                    }
+                }
+                if (injected == 0) {
+                    VORTEK_LOG(warn, "[DEBUG] parse_device_state: HF override active but no rack nozzles found yet to substitute");
+                }
+            }
         }
     }
 
@@ -779,6 +943,33 @@ std::shared_ptr<Slic3r::VortekFilaSwitch> get_fila_switch(const Slic3r::MachineO
 bool is_h2c_printer(const Slic3r::MachineObject* obj) {
     if (!obj) return false;
     return obj->printer_type == "O1C" || obj->printer_type == "O1C2" || obj->printer_type == "Bambu Lab H2C";
+}
+
+// H2C-only: resolve NozzleVolumeType from nozzle stats for sync_extruder_list hook.
+// OrcaSlicer base code does not know about nvtHybrid — it only handles Standard/HighFlow.
+// This function centralizes the Hybrid detection in the Vortek layer so that base OrcaSlicer
+// code (Plater.cpp) only needs a minimal H2C-guarded call, with no business logic there.
+// Returns nullopt for non-mixed carousels (caller keeps its default behavior unchanged).
+// Reference: called from Plater.cpp sync_extruder_list H2C hook.
+std::optional<Slic3r::NozzleVolumeType> resolve_volume_type_from_nozzle_stats(
+    const std::unordered_map<Slic3r::NozzleVolumeType, int>& stats)
+{
+    if (stats.empty()) return std::nullopt;
+
+    auto it_std = stats.find(Slic3r::NozzleVolumeType::nvtStandard);
+    auto it_hf  = stats.find(Slic3r::NozzleVolumeType::nvtHighFlow);
+
+    bool has_std = (it_std != stats.end() && it_std->second > 0);
+    bool has_hf  = (it_hf  != stats.end() && it_hf->second  > 0);
+
+    if (has_std && has_hf) {
+        // Mixed carousel: both Standard and HighFlow nozzles present → Hybrid.
+        VORTEK_LOG(warn, "resolve_volume_type_from_nozzle_stats: detected Hybrid (std="
+                   << (has_std ? it_std->second : 0)
+                   << ", hf=" << (has_hf ? it_hf->second : 0) << ")");
+        return Slic3r::NozzleVolumeType::nvtHybrid;
+    }
+    return std::nullopt; // single type → caller keeps default
 }
 
 void store_wtm_firmware_info(Slic3r::MachineObject* obj, const Slic3r::DevFirmwareVersionInfo& info) {
@@ -1166,11 +1357,58 @@ void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, in
         return;
     }
 
-    int selected_volume_type = volume_type;
-    // For nvtHybrid (2), default to Standard (0) for the plates' actual maps
+    // nvtHybrid (2) means this extruder has mixed Std/HF carousel slots.
+    // Per-filament assignment is user-controlled via Filament Grouping dialog.
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map
+    //
+    // Logic:
+    //   • If plate already has a MIXED map (both 0 and 1 values for this extruder) →
+    //     preserve it (user's dialog choices, or previous Hybrid state). No override.
+    //   • If plate has a UNIFORM map (all-Std or all-HF, i.e. switching back from pure mode) →
+    //     reset to all-Std (BBS default for Hybrid start). User can reassign in dialog.
+    //   • If plate is EMPTY → nothing to do, Step 2b auto-assigns at slicing time.
     if (volume_type == static_cast<int>(Slic3r::NozzleVolumeType::nvtHybrid)) {
-        selected_volume_type = 0;
+        auto& partplate_list = plater->get_partplate_list();
+        for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
+            auto plate = partplate_list.get_plate(idx);
+            if (!plate) continue;
+            auto filament_map = plate->get_filament_maps();
+            auto filament_volume_map = plate->get_filament_volume_maps();
+            if (filament_map.empty() || filament_volume_map.empty()) continue;
+            // Check if current volume map for this extruder is already mixed
+            bool has_std = false, has_hf = false;
+            for (size_t i = 0; i < filament_map.size(); ++i) {
+                if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
+                    if (filament_volume_map[i] == 0) has_std = true;
+                    if (filament_volume_map[i] == 1) has_hf  = true;
+                }
+            }
+            if (has_std && has_hf) {
+                // Already mixed → preserve user assignments
+                VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
+                           << " already has mixed Hybrid map → preserving");
+            } else {
+                // Uniform (all-Std or all-HF) → switching to Hybrid from pure mode.
+                // Reset to all-Std so dialog opens fresh. BBS pattern.
+                bool changed = false;
+                for (size_t i = 0; i < filament_map.size(); ++i) {
+                    if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
+                        if (filament_volume_map[i] != 0) { filament_volume_map[i] = 0; changed = true; }
+                    }
+                }
+                if (changed) {
+                    plate->set_filament_volume_maps(filament_volume_map);
+                    VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
+                               << " was uniform → reset to all-Std for Hybrid (BBS pattern)");
+                }
+            }
+        }
+        return;
     }
+
+    // For non-Hybrid extruders (pure Standard or pure HighFlow): set all filaments
+    // on this extruder to the extruder's single volume type.
+    int selected_volume_type = volume_type;
 
     auto& partplate_list = plater->get_partplate_list();
     for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
@@ -1237,6 +1475,9 @@ void sync_extruder_nozzle_stats_on_preset_select(Slic3r::PresetBundle* preset_bu
     }
 
     std::string prev_nozzle_volume_type = Slic3r::GUI::wxGetApp().app_config->get_nozzle_volume_types_from_config(base_preset_name);
+    if (prev_nozzle_volume_type.empty()) {
+        prev_nozzle_volume_type = "Standard,Hybrid";
+    }
     bool use_default = true;
     if (!prev_nozzle_volume_type.empty()) {
         auto* nozzle_volume_type_option = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
@@ -1269,6 +1510,73 @@ void sync_extruder_nozzle_stats_on_preset_select(Slic3r::PresetBundle* preset_bu
         }
     }
 }
+
+void save_filament_volume_maps_hook(
+    Slic3r::GUI::Plater* plater,
+    Slic3r::GUI::PartPlate* plate,
+    bool sync_plate,
+    bool is_slice_all,
+    Slic3r::FilamentMapMode mode,
+    const std::vector<int>& volume_map)
+{
+    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return;
+
+    // project_config write: only in Manual mode (user explicitly set per-filament HF/Std).
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
+    if (mode == Slic3r::fmmManual) {
+        auto* opt_vm = Slic3r::GUI::wxGetApp().preset_bundle->project_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true);
+        if (opt_vm) {
+            opt_vm->values = volume_map;
+        }
+    }
+
+    // plate write: always save (BBS saves volume_map regardless of mode).
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp:218,226 – set_filament_volume_maps unconditional
+    if (sync_plate && plate) {
+        if (is_slice_all) {
+            auto plate_list = plater->get_partplate_list().get_plate_list();
+            for (int i = 0; i < plate_list.size(); ++i) {
+                plate_list[i]->set_filament_volume_maps(volume_map);
+            }
+        } else {
+            plate->set_filament_volume_maps(volume_map);
+        }
+    }
+}
+
+bool check_volume_maps_changed_hook(
+    const Slic3r::GUI::PartPlate* plate,
+    const Slic3r::DynamicConfig& g_config,
+    const std::vector<int>& new_volume_map)
+{
+    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return false;
+
+    auto old_maps = plate->get_filament_volume_maps();
+    if (old_maps.empty()) {
+        auto* opt_vm = g_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        if (opt_vm) {
+            old_maps = opt_vm->values;
+        }
+    }
+    return old_maps != new_volume_map;
+}
+
+std::vector<int> get_real_filament_volume_maps(
+    const Slic3r::GUI::PartPlate* plate,
+    const Slic3r::DynamicConfig& g_config)
+{
+    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return {};
+
+    auto old_maps = plate->get_filament_volume_maps();
+    if (old_maps.empty()) {
+        auto* opt_vm = g_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        if (opt_vm) {
+            old_maps = opt_vm->values;
+        }
+    }
+    return old_maps;
+}
+
 
 } // namespace DeviceHooks
 } // namespace Vortek

@@ -7,6 +7,7 @@
 #include "GUI_App.hpp"
 #include "CapsuleButton.hpp"
 #include "MsgDialog.hpp"
+#include "slic3r/GUI/DeviceCore/VortekDeviceHooks.hpp"
 
 namespace Slic3r { namespace GUI {
 
@@ -122,18 +123,22 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
                 plater_ref->set_global_filament_map(new_maps);
         }
 
-        // H2C: Write filament_volume_map back to project config from dialog.
-        // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up volume map write-back
-        if (new_mode == fmmManual) {
+        if (Vortek::is_h2c_printer(wxGetApp().preset_bundle)) {
             auto new_volume_map = map_dlg.get_filament_volume_maps();
-            if (!new_volume_map.empty()) {
-                auto* opt_vm = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
-                if (opt_vm) {
-                    opt_vm->values = new_volume_map;
+            bool volume_map_changed = Vortek::DeviceHooks::check_volume_maps_changed_hook(partplate_ref, wxGetApp().preset_bundle->project_config, new_volume_map);
+            Vortek::DeviceHooks::save_filament_volume_maps_hook(plater_ref, partplate_ref, sync_plate, is_slice_all, new_mode, new_volume_map);
+            if (volume_map_changed) {
+                if (is_slice_all) {
+                    auto plate_list = plater_ref->get_partplate_list().get_plate_list();
+                    for (int i = 0; i < plate_list.size(); ++i) {
+                        plate_list[i]->update_slice_result_valid_state(false);
+                    }
+                } else if (partplate_ref) {
+                    partplate_ref->update_slice_result_valid_state(false);
                 }
+                plater_ref->set_plater_dirty(true);
             }
         }
-
         plater_ref->update();
         // check whether able to slice, if not, return false
         if (!get_left_extruder_unprintable_text().empty() || !get_right_extruder_unprintable_text().empty()){

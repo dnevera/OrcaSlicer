@@ -110,6 +110,18 @@ void process_nozzle_placement(
     int raw_id);
 
 bool is_h2c_printer(const Slic3r::MachineObject* obj);
+
+/**
+ * @brief H2C-only: resolves the correct NozzleVolumeType for an extruder given its nozzle stats.
+ * OrcaSlicer base sync code does not know about nvtHybrid — it only handles Standard/HighFlow.
+ * This function detects the mixed-carousel case (both Standard AND HighFlow present) and returns
+ * nvtHybrid. For non-H2C printers or single-type carousels, returns nullopt (caller keeps default).
+ * Must be called inside an is_h2c_printer() guard in base OrcaSlicer code.
+ * Reference: src/slic3r/GUI/Plater.cpp sync_extruder_list — minimal H2C hook insertion point.
+ */
+std::optional<Slic3r::NozzleVolumeType> resolve_volume_type_from_nozzle_stats(
+    const std::unordered_map<Slic3r::NozzleVolumeType, int>& stats);
+
 void store_wtm_firmware_info(Slic3r::MachineObject* obj, const Slic3r::DevFirmwareVersionInfo& info);
 void clear_wtm_firmware_info(Slic3r::MachineObject* obj);
 
@@ -244,6 +256,28 @@ void on_extruder_volume_type_changed(Slic3r::PresetBundle* preset_bundle, int ex
 
 // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: select_preset
 void sync_extruder_nozzle_stats_on_preset_select(Slic3r::PresetBundle* preset_bundle, const std::string& base_preset_name);
+
+// H2C: GUI filament volume map saving and thread-local synchronization hooks
+void save_filament_volume_maps_hook(
+    Slic3r::GUI::Plater* plater,
+    Slic3r::GUI::PartPlate* plate,
+    bool sync_plate,
+    bool is_slice_all,
+    Slic3r::FilamentMapMode mode,
+    const std::vector<int>& volume_map
+);
+
+bool check_volume_maps_changed_hook(
+    const Slic3r::GUI::PartPlate* plate,
+    const Slic3r::DynamicConfig& g_config,
+    const std::vector<int>& new_volume_map
+);
+
+std::vector<int> get_real_filament_volume_maps(
+    const Slic3r::GUI::PartPlate* plate,
+    const Slic3r::DynamicConfig& g_config
+);
+
 
 } // namespace DeviceHooks
 } // namespace Vortek

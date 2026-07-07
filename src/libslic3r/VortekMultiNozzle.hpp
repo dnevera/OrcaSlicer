@@ -121,26 +121,67 @@ public:
     LayeredNozzleGroupResult(bool support_dynamic_map = false) : NozzleGroupResultBase(support_dynamic_map) {}
 
     /**
-     * @brief Factory method creating a layered result using simple mapping.
+     * @brief [Auto-assign] Creates result from a pre-computed filament→nozzle index map.
+     *
+     * Used in automatic carousel assignment (fmmAuto / fmmManual without explicit HF binding).
+     * The caller has already matched each filament to a nozzle slot index in `nozzle_list`.
+     * This overload simply packages the result without re-resolving anything.
+     *
+     * @param filament_nozzle_map  Per-filament index into nozzle_list (0-based).
+     * @param nozzle_list          Ordered list of physical nozzles (extruder_id, volume_type, group_id).
+     * @param used_filaments       Indices of filaments actually used in this print.
+     * Reference to BBS: BambuStudio/src/libslic3r/ToolOrdering.cpp – auto carousel assignment
      */
-    static std::optional<LayeredNozzleGroupResult> create(
+    static std::optional<LayeredNozzleGroupResult> create_from_index_map(
         const std::vector<int>&          filament_nozzle_map,
         const std::vector<NozzleInfo>&   nozzle_list,
         const std::vector<unsigned int>& used_filaments);
 
     /**
-     * @brief Factory method creating a fully-specified layered result with sequence info.
+     * @brief [Layer-sequence] Creates result from per-layer nozzle assignment with dynamic switching.
+     *
+     * Used when filaments are split across layers (dynamic nozzle map). Each layer may map
+     * filaments to different nozzle slots. Enables pre-cooling/pre-heating sequencing in GCode.
+     * `support_dynamic_nozzle_map` is set to true if any filament changes nozzle across layers.
+     *
+     * @param layer_filament_nozzle_maps  Per-layer per-filament nozzle index map.
+     * @param nozzle_list                 Physical nozzle list.
+     * @param used_filaments              Used filament indices.
+     * @param layer_filament_sequences    Per-layer filament print order (for pre-cooling ordering).
+     * Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp – dynamic nozzle map
      */
-    static std::optional<LayeredNozzleGroupResult> create(
+    static std::optional<LayeredNozzleGroupResult> create_from_layer_sequence(
         const std::vector<std::vector<int>>&          layer_filament_nozzle_maps,
         const std::vector<NozzleInfo>&                nozzle_list,
         const std::vector<unsigned int>&              used_filaments,
         const std::vector<std::vector<unsigned int>>& layer_filament_sequences);
 
     /**
-     * @brief Factory method constructing a mapping result based on print config maps.
+     * @brief [Config-based] Creates result from stored config maps, respecting user's explicit HF binding.
+     *
+     * This is the authoritative overload for H2C Hybrid mode. It reconstructs nozzle assignment
+     * from the three config arrays saved in plate_config / project_config:
+     *   - filament_map:        which extruder each filament goes to (1=Left, 2=Right)
+     *   - filament_volume_map: explicit HF override per filament (0=Standard, 1=HighFlow)
+     *   - filament_nozzle_map: carousel slot per filament (0=Left, 1-4=carousel slot)
+     *
+     * Uses nozzle_count (from extruder_nozzle_stats) to build the physical nozzle_list,
+     * then matches each filament to a nozzle by (extruder_id, volume_type) — respecting
+     * the user's explicit filament→HF assignment from FilamentMapDialog.
+     *
+     * Called from: ensure_nozzle_group_result (fmmNozzleManual and fmmManual with user HF binding),
+     *              update_filament_maps_to_config (Step 3, always after NozzleManual path).
+     *
+     * @param used_filaments      Used filament indices.
+     * @param filament_map        Extruder assignment per filament (1-based).
+     * @param filament_volume_map Volume type override per filament (nvtStandard=0, nvtHighFlow=1).
+     * @param filament_nozzle_map Carousel slot assignment per filament.
+     * @param nozzle_count        Per-extruder {volume_type → count} from extruder_nozzle_stats.
+     * @param diameter            Nozzle diameter (all nozzles share one diameter in H2C 0.4mm config).
+     * Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – user HF binding save
+     * Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map
      */
-    static std::optional<LayeredNozzleGroupResult> create(
+    static std::optional<LayeredNozzleGroupResult> create_from_config(
         const std::vector<unsigned int>&                    used_filaments,
         const std::vector<int>&                             filament_map,
         const std::vector<int>&                             filament_volume_map,

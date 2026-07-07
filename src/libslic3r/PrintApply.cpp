@@ -1175,6 +1175,9 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
         m_ori_full_print_config = new_full_config;
         new_full_config.update_values_to_printer_extruders_for_multiple_filaments(new_full_config, filament_options_with_variant,  "filament_self_index", "filament_extruder_variant");
+
+        // Vortek: restore correct variant filament overrides for H2C print configuration
+        Vortek::PlateMapping::restore_filament_variant_overrides_h2c(new_full_config, m_ori_full_print_config);
     }
     // else {
     //     int extruder_count;

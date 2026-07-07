@@ -3950,8 +3950,16 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     if (num_filaments <= 1) {
         //BBS: update filament config related with variants
         DynamicPrintConfig filament_config = this->filaments.get_edited_preset().config;
-        if (apply_extruder)
-            filament_config.update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[0]);
+        if (apply_extruder) {
+            if (Vortek::is_h2c_printer(out)) {
+                auto* opt_vm = out.option<ConfigOptionInts>("filament_volume_map");
+                std::vector<int> volume_maps = opt_vm ? opt_vm->values : std::vector<int>();
+                int filament_nvt = volume_maps.empty() ? (int)nvtStandard : volume_maps[0];
+                Vortek::PrintHooks::apply_single_filament_extruder_override_h2c(out, filament_config, filament_maps[0], apply_extruder, filament_nvt);
+            } else {
+                filament_config.update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[0]);
+            }
+        }
         out.apply(filament_config);
         compatible_printers_condition.emplace_back(this->filaments.get_edited_preset().compatible_printers_condition());
         compatible_prints_condition  .emplace_back(this->filaments.get_edited_preset().compatible_prints_condition());
@@ -4044,8 +4052,17 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
         filament_temp_configs.resize(num_filaments);
         for (size_t i = 0; i < num_filaments; ++i) {
             filament_temp_configs[i] = *(filament_configs[i]);
-            if (apply_extruder)
-                filament_temp_configs[i].update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[i]);
+        }
+        if (apply_extruder) {
+            if (Vortek::is_h2c_printer(out)) {
+                auto* opt_vm = out.option<ConfigOptionInts>("filament_volume_map");
+                std::vector<int> volume_maps = opt_vm ? opt_vm->values : std::vector<int>();
+                Vortek::PrintHooks::apply_filament_extruder_overrides_h2c(out, filament_temp_configs, filament_maps, apply_extruder, volume_maps);
+            } else {
+                for (size_t i = 0; i < num_filaments; ++i) {
+                    filament_temp_configs[i].update_values_to_printer_extruders(out, filament_options_with_variant, "", "filament_extruder_variant", 1, filament_maps[i]);
+                }
+            }
         }
 
         // loop through options and apply them to the resulting config.

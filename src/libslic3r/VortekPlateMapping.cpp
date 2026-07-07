@@ -3,7 +3,12 @@
 #include "PresetBundle.hpp"
 #include "VortekPrintHooks.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
-#include <algorithm>
+#include <set>
+#include <string>
+
+namespace Slic3r {
+extern std::set<std::string> filament_options_with_variant;
+}
 
 namespace Vortek {
 
@@ -211,30 +216,35 @@ std::vector<int> PlateMapping::get_nozzle_map_for_export(const Slic3r::Print* pr
 std::vector<int> PlateMapping::get_volume_map_for_export(const Slic3r::Print* print, const Slic3r::DynamicPrintConfig& plate_config)
 {
     // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map export
-    // Priority: plate_config is set by BackgroundSlicingProcess::process() AFTER slicing via
-    // set_filament_volume_maps() with the correct multi-element array.
-    // print->full_print_config() may have been reset by a subsequent Print::apply() call.
-    // So: prefer plate_config if it has >1 element (post-slice initialized), else fall back to print.
+    //
+    // Priority order:
+    //   1. plate_config (PartPlate::m_config) — set by BackgroundSlicingProcess after slice
+    //      via set_filament_volume_maps(). Always a correctly sized full array.
+    //      NOTE: condition was previously `size() > 1` which incorrectly skipped single-filament
+    //      plates. Changed to `!empty()` — a 1-element map is a valid single-filament assignment.
+    //   2. print->full_print_config() — valid immediately after slicing, before a subsequent
+    //      Print::apply() call may have reset it.
+    //   3. Empty — no volume map available, caller handles the absence.
     if (plate_config.has("filament_volume_map")) {
         auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
-        if (plate_opt && plate_opt->values.size() > 1) {
-            VORTEK_LOG(warn, "get_volume_map_for_export: using plate_config volume map (" << plate_opt->values.size() << " elements)");
+        if (plate_opt && !plate_opt->values.empty()) {
+            VORTEK_LOG(warn, "get_volume_map_for_export: using plate_config volume map ("
+                       << plate_opt->values.size() << " elements)");
             return plate_opt->values;
         }
     }
     // Fallback: try print->full_print_config() (valid immediately after slicing)
-    if (print && plate_config.has("filament_volume_map")) {
+    if (print) {
         const auto& full_cfg = print->full_print_config();
         if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_volume_map")) {
-            if (opt->values.size() > 1) {
-                VORTEK_LOG(warn, "get_volume_map_for_export: using print-derived volume map (" << opt->values.size() << " elements)");
+            if (!opt->values.empty()) {
+                VORTEK_LOG(warn, "get_volume_map_for_export: plate_config empty, using print-derived volume map ("
+                           << opt->values.size() << " elements)");
                 return opt->values;
             }
         }
     }
-    if (plate_config.has("filament_volume_map")) {
-        return plate_config.option<Slic3r::ConfigOptionInts>("filament_volume_map")->values;
-    }
+    VORTEK_LOG(warn, "get_volume_map_for_export: no volume map found, returning empty");
     return {};
 }
 
@@ -378,6 +388,58 @@ void PlateMapping::filter_reslice_diffs(
         erase_key(full_config_diff, key);
     }
 
+    // H2C Hybrid: suppress extruder_nozzle_stats diff when only std_count changes.
+    // The std count fluctuates 3↔4 as slot-6 "In Use" nozzle appears/disappears across
+    // firmware pings. This is harmless — HF count drives slot assignment, std count does not.
+    // Suppress if: for every extruder, hf_count is unchanged (even if std_count differs).
+    // Also suppress Standard#N → Standard#M|HighFlow#K (offline→online first connect):
+    // that diff is structural and always happens once — machine sync handles the real update.
+    // Reference: VortekDeviceHooks.cpp sync_machine_nozzle_inventory_to_preset HF-only trigger.
+    auto suppress_nozzle_stats_if_hf_stable = [&](Slic3r::t_config_option_keys& diff_keys,
+                                                   const Slic3r::ConfigBase& old_cfg)
+    {
+        static const std::string key = "extruder_nozzle_stats";
+        auto it = std::find(diff_keys.begin(), diff_keys.end(), key);
+        if (it == diff_keys.end()) return;
+
+        const auto* opt_old = old_cfg.option<Slic3r::ConfigOptionStrings>(key);
+        const auto* opt_new = new_full_config.option<Slic3r::ConfigOptionStrings>(key);
+        if (!opt_old || !opt_new || opt_old->size() != opt_new->size()) return;
+
+        // Parse "Type#count|Type#count" strings into {type → count} maps.
+        // Types: "Standard"=0, "High Flow"=1, "Hybrid"=2
+        auto parse_stats = [](const std::string& s) -> std::map<std::string, int> {
+            std::map<std::string, int> result;
+            std::istringstream ss(s);
+            std::string token;
+            while (std::getline(ss, token, '|')) {
+                auto pos = token.rfind('#');
+                if (pos == std::string::npos) continue;
+                std::string type = token.substr(0, pos);
+                int count = 0;
+                try { count = std::stoi(token.substr(pos + 1)); } catch (...) {}
+                result[type] += count;
+            }
+            return result;
+        };
+
+        bool hf_stable = true;
+        for (size_t eid = 0; eid < opt_old->size(); ++eid) {
+            auto old_map = parse_stats(opt_old->values[eid]);
+            auto new_map = parse_stats(opt_new->values[eid]);
+            int old_hf = old_map.count("High Flow") ? old_map.at("High Flow") : 0;
+            int new_hf = new_map.count("High Flow") ? new_map.at("High Flow") : 0;
+            if (old_hf != new_hf) { hf_stable = false; break; }
+        }
+        if (hf_stable) {
+            VORTEK_LOG(warn, "filter_reslice_diffs: suppressing extruder_nozzle_stats diff"
+                             " (HF count stable, std-only change)");
+            diff_keys.erase(it);
+        }
+    };
+    suppress_nozzle_stats_if_hf_stable(print_diff, print.config());
+    suppress_nozzle_stats_if_hf_stable(full_config_diff, print.full_print_config());
+
     // Erase keys whose only difference is vector size expansion where elements are equal up to the smaller size
     // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
     auto filter_vector_size_diffs = [&](Slic3r::t_config_option_keys& diff_keys, const Slic3r::ConfigBase& old_cfg) {
@@ -469,6 +531,28 @@ void PlateMapping::apply_filament_retract_overrides(
             if (new_fil_vec && default_maps.size() == new_fil_vec->size()) {
                 opt_new_machine->apply_override(opt_new_filament, default_maps);
             }
+        }
+    }
+}
+
+void PlateMapping::restore_filament_variant_overrides_h2c(
+    Slic3r::DynamicPrintConfig& new_full_config,
+    const Slic3r::DynamicPrintConfig& ori_full_config
+)
+{
+    // Rule: Vortek hooks are isolated to H2C printers only
+    if (!is_h2c_printer(new_full_config)) {
+        return;
+    }
+
+    // We restore options that depend on nozzle variants back from the original config 
+    // which was generated correctly by PresetBundle with H2C overrides.
+    // This bypasses the default OrcaSlicer logic which doesn't support nvtHybrid variant selection.
+    for (const auto& key : Slic3r::filament_options_with_variant) {
+        const Slic3r::ConfigOption* opt_ori = ori_full_config.option(key);
+        Slic3r::ConfigOption* opt_new = new_full_config.option(key);
+        if (opt_ori && opt_new) {
+            *opt_new = *opt_ori;
         }
     }
 }

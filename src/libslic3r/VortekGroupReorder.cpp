@@ -34,7 +34,7 @@ bool GroupReorder::handle_nozzle_manual_reorder(
     auto nozzle_stats = Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(print_config->extruder_nozzle_stats.values);
     float nozzle_dia = print_config->nozzle_diameter.values.empty() ? 0.4f : print_config->nozzle_diameter.values.front();
 
-    auto nozzle_result = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+    auto nozzle_result = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_config(
         used_filaments,
         manual_filament_map,
         print_config->filament_volume_map.values,
@@ -95,7 +95,7 @@ bool GroupReorder::ensure_nozzle_group_result(
         auto manual_filament_map = config.option<Slic3r::ConfigOptionInts>("filament_map")->values;
         std::transform(manual_filament_map.begin(), manual_filament_map.end(), manual_filament_map.begin(), [](int v) { return v - 1; });
 
-        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_config(
             used_filaments,
             manual_filament_map,
             config.option<Slic3r::ConfigOptionInts>("filament_volume_map")->values,
@@ -105,6 +105,34 @@ bool GroupReorder::ensure_nozzle_group_result(
         );
         if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
     } else {
+        // For fmmManual / fmmAuto: check if user has an explicit filament_volume_map
+        // (any filament set to HF, i.e. value != 0). If so, respect it exactly like
+        // fmmNozzleManual — the user dragged a filament to an HF nozzle in the dialog.
+        // Without this, slicing always overwrites the assignment with auto-assignment
+        // from nozzle_stats, reverting HF → Standard on every reslice.
+        // Reference: VortekDeviceHooks.cpp save_filament_volume_maps_hook
+        auto* vm_opt = config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        bool has_user_volume_map = false;
+        if (vm_opt && !vm_opt->values.empty() && vm_opt->values.size() == filament_maps.size()) {
+            for (int v : vm_opt->values) if (v != 0) { has_user_volume_map = true; break; }
+        }
+        if (has_user_volume_map) {
+            // User explicitly assigned filament(s) to HF nozzle — preserve choice.
+            auto manual_filament_map = config.option<Slic3r::ConfigOptionInts>("filament_map")->values;
+            std::transform(manual_filament_map.begin(), manual_filament_map.end(), manual_filament_map.begin(), [](int v) { return v - 1; });
+            auto nozzle_map = config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
+            VORTEK_LOG(warn, "ensure_nozzle_group_result: user volume_map set — using NozzleManual path (HF binding preserved)");
+            auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_config(
+                used_filaments,
+                manual_filament_map,
+                vm_opt->values,
+                nozzle_map,
+                nozzle_stats,
+                nozzle_dia
+            );
+            if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
+        }
+        if (!has_user_volume_map) {
         std::vector<Slic3r::MultiNozzleUtils::NozzleInfo> nozzle_list;
         int next_carousel_nozzle = 4;
         for (size_t i = 0; i < nozzle_stats.size(); ++i) {
@@ -160,9 +188,10 @@ bool GroupReorder::ensure_nozzle_group_result(
                 << " -> nozzle_idx=" << filament_nozzle_idx_map[i]);
         }
 
-        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create(
+        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_index_map(
             filament_nozzle_idx_map, nozzle_list, used_filaments);
         if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
+        } // end if (!has_user_volume_map)
     }
 
     if (nozzle_result) {
@@ -194,12 +223,23 @@ void GroupReorder::handle_manual_mode_reorder(
         return;
     }
 
-    VORTEK_LOG(warn, "handle_manual_mode_reorder: carousel used in Manual mode — initializing nozzle_group_result via update_filament_maps_to_config");
+    // Read the user's volume map (Std/HF assignment) saved in print config.
+    // Pass it explicitly so VortekPrintHooks Step 2 does NOT auto-assign via VORTEK_DEBUG_HF_NOZZLE_OVERRIDE,
+    // respecting whatever the user selected in the Filament Grouping dialog.
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp – filament_volume_map read
+    std::vector<int> saved_volume_maps = print->config().filament_volume_map.values;
+    {
+        std::string vm_str;
+        for (int v : saved_volume_maps) vm_str += std::to_string(v) + ",";
+        VORTEK_LOG(warn, "handle_manual_mode_reorder: carousel used in Manual mode"
+                   << " — saved_volume_maps=[" << vm_str << "]"
+                   << (saved_volume_maps.empty() ? " (empty → auto-assign will run)" : " (user map → no auto-assign)"));
+    }
 
     print->update_filament_maps_to_config(
         filament_maps,
-        std::vector<int>(),   
-        std::vector<int>());  
+        saved_volume_maps,
+        std::vector<int>());
 
     ensure_nozzle_group_result(print, print->full_print_config(), filament_maps, Slic3r::fmmManual);
 }

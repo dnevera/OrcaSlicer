@@ -57,11 +57,14 @@ static bool has_filament_mapped_to_multiple_nozzles(
     return false;
 }
 
-std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
+// [Auto-assign] Packages a pre-computed filament→nozzle index map into a result object.
+// The caller already resolved which nozzle slot each filament goes to (by iterating nozzle_list).
+// This overload does no matching logic — it simply stores and returns.
+std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_index_map(
     const std::vector<int>& filament_nozzle_map,
     const std::vector<NozzleInfo>& nozzle_list,
     const std::vector<unsigned int>& used_filaments) {
-    VORTEK_LOG(debug, "LayeredNozzleGroupResult::create (simple): nozzles = " << nozzle_list.size() << ", filaments = " << used_filaments.size());
+    VORTEK_LOG(debug, "LayeredNozzleGroupResult::create_from_index_map: nozzles = " << nozzle_list.size() << ", filaments = " << used_filaments.size());
     if (filament_nozzle_map.empty() || nozzle_list.empty()) {
         return std::nullopt;
     }
@@ -72,12 +75,15 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
     return result;
 }
 
-std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
+// [Layer-sequence] Builds a result from per-layer nozzle maps with dynamic switching.
+// Used by the GCode/ToolOrdering pipeline when filaments may change nozzle across layers.
+// Sets support_dynamic_nozzle_map=true if any filament uses different nozzles on different layers.
+std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_layer_sequence(
     const std::vector<std::vector<int>>& layer_filament_nozzle_maps,
     const std::vector<NozzleInfo>& nozzle_list,
     const std::vector<unsigned int>& used_filaments,
     const std::vector<std::vector<unsigned int>>& layer_filament_sequences) {
-    VORTEK_LOG(debug, "LayeredNozzleGroupResult::create (layered): nozzles = " << nozzle_list.size() << ", layers = " << layer_filament_nozzle_maps.size());
+    VORTEK_LOG(debug, "LayeredNozzleGroupResult::create_from_layer_sequence: nozzles = " << nozzle_list.size() << ", layers = " << layer_filament_nozzle_maps.size());
     if (layer_filament_nozzle_maps.empty() || nozzle_list.empty()) {
         return std::nullopt;
     }
@@ -93,7 +99,19 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
     return result;
 }
 
-std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
+// [Config-based] Reconstructs nozzle assignment from stored config arrays.
+// Authoritative path for H2C Hybrid manual binding: respects filament_volume_map
+// (user's explicit HF choice from FilamentMapDialog) when matching filaments to nozzles.
+//
+// Algorithm:
+//   1. Build nozzle_list from nozzle_count (extruder_nozzle_stats): each {extruder, vol_type}
+//      entry spawns `count` NozzleInfo slots with assigned group_id (carousel slot).
+//   2. For each used filament, find a free nozzle slot with matching (extruder_id, volume_type).
+//      volume_type comes from filament_volume_map (explicit HF=1 or Standard=0).
+//   3. Build output_nozzle_map (filament→nozzle_list index) and delegate to create_from_index_map.
+//
+// Returns std::nullopt if any filament cannot be matched (e.g. HF nozzle requested but none exist).
+std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_config(
     const std::vector<unsigned int>& used_filaments,
     const std::vector<int>& filament_map,
     const std::vector<int>& filament_volume_map,
@@ -112,7 +130,7 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
         }
     }
     auto nozzle_list = build_nozzle_list(nozzle_groups);
-    VORTEK_LOG(warn, "LayeredNozzleGroupResult::create (stats): stats size = " << nozzle_count.size() 
+    VORTEK_LOG(warn, "LayeredNozzleGroupResult::create_from_config: stats size = " << nozzle_count.size() 
                       << ", nozzle_list size = " << nozzle_list.size() 
                       << ", diameter = " << diameter);
     
@@ -148,6 +166,9 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
         for (size_t nozzle_idx = 0; nozzle_idx < nozzle_list.size(); ++nozzle_idx) {
             if (used_nozzle[nozzle_idx]) continue;
             auto& nozzle_info = nozzle_list[nozzle_idx];
+            // Match filament to nozzle by extruder AND volume_type (Standard vs HighFlow).
+            // This is what makes filament_volume_map effective: a filament with vol_type=HF
+            // will only match an HF nozzle slot, not a Standard slot.
             if (!(nozzle_info.extruder_id == req_extruder && nozzle_info.volume_type == req_type)) continue;
 
             output_nozzle_idx = static_cast<int>(nozzle_idx);
@@ -161,7 +182,8 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create(
         }
         output_nozzle_map[filament_idx] = output_nozzle_idx;
     }
-    return create(output_nozzle_map, nozzle_list, used_filaments);
+    // Delegate final packaging to create_from_index_map — the output index map is now resolved.
+    return create_from_index_map(output_nozzle_map, nozzle_list, used_filaments);
 }
 
 bool LayeredNozzleGroupResult::are_filaments_same_extruder(int filament_id1, int filament_id2, int layer_id) const {
@@ -550,27 +572,23 @@ void ExtruderNozzleStat::on_printer_model_change(PresetBundle* preset_bundle)
         else
             type = NozzleVolumeType(nozzle_volume_type->values[eid]);
 
-        // For H2C:
-        // - Left extruder (eid=0): exactly 1 fixed nozzle.
-        // - Right extruder (eid>0): full carousel capacity (e.g. 4 Standard slots).
-        //   BBL stores this as "Standard#4" — keeping max_nozzle_count is correct.
-        // - nvtHybrid is a UI mode indicator; physical carousel slots are Standard-type.
-        //   LayeredNozzleGroupResult::create() matches filaments by (extruder_id, volume_type),
-        //   so we must store Standard to match the nvtStandard entries in final_volume_maps.
-        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301
-        //   BBL extruder_nozzle_stats = ['Standard#1', 'Standard#4'] for H2C Hybrid.
-        // count: Left (eid=0) fixed to 1 slot; Right carousel uses max_nozzle_count.
-        // nvtHybrid: do NOT collapse to nvtStandard here. The actual per-slot mix
-        // (Standard vs HighFlow) is set later by sync_machine_nozzle_inventory_to_preset
-        // (VortekDeviceHooks.cpp) when a real machine is connected.
-        // In offline/preset-change context, nvtHybrid is stored as-is; the ndfMachine flag
-        // will protect these counts from being overwritten when live sync runs.
-        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301
+        // For H2C Hybrid: nvtHybrid is a UI-mode marker, NOT a physical nozzle slot type.
+        // Machine sync (sync_machine_nozzle_inventory_to_preset) writes {Standard:N, HighFlow:M}.
+        // If we store {Hybrid: max_count} here, the diff with {Standard:N, HighFlow:M} causes a reslice
+        // on every printer connect — the representations are structurally different.
+        // Fix: store {Standard: max_count} as the offline default, matching BBS "Standard#4" pattern.
+        // Machine sync will overwrite with actual {Standard:4, HighFlow:1} on connect.
+        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301 ("Standard#4" for H2C Hybrid)
+        NozzleVolumeType store_type = type;
+        if (is_h2c && type == nvtHybrid) {
+            store_type = nvtStandard;  // H2C: offline default — machine sync overwrites with real counts
+        }
         int count = max_nozzle_count->values[eid];
         if (is_h2c && eid == 0) {
             count = 1;  // Left fixed nozzle: only 1 slot
         }
-        set_extruder_nozzle_count(eid, type, count, true);
+        set_extruder_nozzle_count(eid, store_type, count, true);
+
     }
 }
 

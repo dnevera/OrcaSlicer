@@ -1775,9 +1775,21 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
         std::optional<NozzleVolumeType> select_type;
         if (nozzle_option && nozzle_option->extruder_nozzle_stats.count(index)) {
             const auto &stats = nozzle_option->extruder_nozzle_stats.at(index);
-            if (!stats.empty())
-                // v2 has no nvtHybrid; if both flows are present, keep the first entry.
-                select_type = stats.begin()->first;
+            if (!stats.empty()) {
+                // H2C hook: OrcaSlicer does not know about nvtHybrid.
+                // For H2C printers, delegate resolution to Vortek layer (all logic there).
+                // For all other printers: keep original behavior (first entry in map).
+                // Reference: Vortek::DeviceHooks::resolve_volume_type_from_nozzle_stats
+                if (Vortek::DeviceHooks::is_h2c_printer(obj)) {
+                    auto vortek_type = Vortek::DeviceHooks::resolve_volume_type_from_nozzle_stats(stats);
+                    if (vortek_type)
+                        select_type = *vortek_type;
+                    else
+                        select_type = stats.begin()->first;
+                } else {
+                    select_type = stats.begin()->first; // original OrcaSlicer behavior
+                }
+            }
         }
         NozzleVolumeType target_type = NozzleVolumeType::nvtStandard;
         auto printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER));
@@ -1795,6 +1807,8 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
         if (select_type)
             target_type = *select_type;
         printer_tab->set_extruder_volume_type(index, target_type);
+
+
     }
 
     int deputy_4 = 0, main_4 = 0, deputy_1 = 0, main_1 = 0;
@@ -8546,6 +8560,13 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
     if (preset_bundle->get_printer_extruder_count() > 1) {
         PartPlate* cur_plate = background_process.get_current_plate();
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
+        if (Vortek::is_h2c_printer(preset_bundle)) {
+            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(cur_plate, preset_bundle->project_config);
+            auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
+            if (opt_vm) {
+                opt_vm->values = f_volume_maps;
+            }
+        }
         invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
     }
@@ -18087,6 +18108,13 @@ void Plater::apply_background_progress()
     Print::ApplyStatus invalidated;
     if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
+        if (Vortek::is_h2c_printer(preset_bundle)) {
+            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+            auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
+            if (opt_vm) {
+                opt_vm->values = f_volume_maps;
+            }
+        }
         invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
     }
     else
@@ -18132,6 +18160,13 @@ int Plater::select_plate(int plate_index, bool need_slice)
         //always apply the current plate's print
         if (preset_bundle->get_printer_extruder_count() > 1) {
             std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
+            if (Vortek::is_h2c_printer(preset_bundle)) {
+                auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+                auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
+                if (opt_vm) {
+                    opt_vm->values = f_volume_maps;
+                }
+            }
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
         }
         else
@@ -18517,22 +18552,26 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
             curr_plate->set_filament_map_mode(new_map_mode);
         }
 
-        if (new_map_mode == fmmManual){
-            curr_plate->set_filament_maps(new_filament_maps);
-
-            // H2C: Write filament_volume_map back to project config from dialog.
-            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp – filament_volume_map write-back
+        bool volume_map_changed = false;
+        if (Vortek::is_h2c_printer(wxGetApp().preset_bundle)) {
             auto new_volume_map = filament_dlg.get_filament_volume_maps();
-            if (!new_volume_map.empty()) {
-                auto* opt_vm = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
-                if (opt_vm) {
-                    opt_vm->values = new_volume_map;
-                }
+            volume_map_changed = Vortek::DeviceHooks::check_volume_maps_changed_hook(curr_plate, project_config, new_volume_map);
+
+            if (new_map_mode == fmmManual){
+                curr_plate->set_filament_maps(new_filament_maps);
+
+                // H2C: Write filament_volume_map back to project config and plate from dialog.
+                Vortek::DeviceHooks::save_filament_volume_maps_hook(this, curr_plate, true, false, new_map_mode, new_volume_map);
+            }
+        } else {
+            if (new_map_mode == fmmManual){
+                curr_plate->set_filament_maps(new_filament_maps);
             }
         }
 
         bool need_invalidate = (old_map_mode != new_map_mode ||
-                                old_filament_maps != new_filament_maps);
+                                old_filament_maps != new_filament_maps ||
+                                volume_map_changed);
 
         if (need_invalidate) {
             if (need_slice) {
