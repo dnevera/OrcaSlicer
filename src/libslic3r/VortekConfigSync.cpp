@@ -105,9 +105,29 @@ int ConfigSync::sync_variant_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigB
 // ────────────────────── Orchestrated Operations ──────────────────────
 
 int ConfigSync::align_incoming_config(Slic3r::DynamicPrintConfig& new_full_config) {
+    // [DIAG] Log retraction_length sizes before sync
+    {
+        const auto* src = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(m_print.m_full_print_config.option("retraction_length"));
+        const auto* dst = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(new_full_config.option("retraction_length"));
+        VORTEK_LOG(warn, "ConfigSync::align BEFORE: retraction_length src_size="
+            << (src ? src->size() : 0) << " dst_size=" << (dst ? dst->size() : 0)
+            << " src='" << (src ? m_print.m_full_print_config.option("retraction_length")->serialize() : "null") << "'"
+            << " dst='" << (dst ? new_full_config.option("retraction_length")->serialize() : "null") << "'");
+    }
+
     // Direction: m_full_print_config (source of truth) → new_full_config
-    // Ensures print_config_diffs(m_config, new_full_config) = 0 for managed keys
     int copied = sync_all_keys(m_print.m_full_print_config, new_full_config);
+
+    // [DIAG] Log retraction_length sizes after sync
+    {
+        const auto* src = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(m_print.m_full_print_config.option("retraction_length"));
+        const auto* dst = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(new_full_config.option("retraction_length"));
+        VORTEK_LOG(warn, "ConfigSync::align AFTER: retraction_length src_size="
+            << (src ? src->size() : 0) << " dst_size=" << (dst ? dst->size() : 0)
+            << " src='" << (src ? m_print.m_full_print_config.option("retraction_length")->serialize() : "null") << "'"
+            << " dst='" << (dst ? new_full_config.option("retraction_length")->serialize() : "null") << "'");
+    }
+
     VORTEK_LOG(warn, "ConfigSync::align_incoming_config: copied " << copied
         << " keys from m_full_print_config → new_full_config");
     return copied;
