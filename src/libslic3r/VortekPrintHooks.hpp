@@ -178,7 +178,9 @@ public:
         int extruder_count
     );
 
-private:
+
+    // Used by PlateMapping::override_filament_variant_expansion
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp L8756-8762
     static void update_filament_config_values_for_multiple_extruders(
         Slic3r::DynamicPrintConfig &printer_config,
         const std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> &filament_extruder_nozzle_infos,

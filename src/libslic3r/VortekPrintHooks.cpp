@@ -1,4 +1,5 @@
 #include "VortekPrintHooks.hpp"
+#include "VortekConfigSync.hpp"
 #include "Print.hpp"
 #include "PrintConfig.hpp"
 #include "VortekLog.hpp"
@@ -419,6 +420,37 @@ void PrintHooks::update_filament_maps_to_config(
     bool nozzle_changed = (!final_nozzle_maps.empty() &&
                            print.config().filament_nozzle_map.values != final_nozzle_maps);
 
+    // [Vortek DIAG] Log what specifically changed in the idempotency guard
+    auto serialize_vec = [](const std::vector<int>& v) -> std::string {
+        std::string s;
+        for (int x : v) { if (!s.empty()) s += ","; s += std::to_string(x); }
+        return s.empty() ? "<empty>" : s;
+    };
+    if (maps_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_map.values) << "]"
+            << " (sz=" << print.config().filament_map.values.size() << ")"
+            << " computed=[" << serialize_vec(f_maps) << "]"
+            << " (sz=" << f_maps.size() << ")");
+    }
+    if (volume_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_volume_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_volume_map.values) << "]"
+            << " (sz=" << print.config().filament_volume_map.values.size() << ")"
+            << " computed=[" << serialize_vec(final_volume_maps) << "]"
+            << " (sz=" << final_volume_maps.size() << ")");
+    }
+    if (nozzle_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_nozzle_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_nozzle_map.values) << "]"
+            << " (sz=" << print.config().filament_nozzle_map.values.size() << ")"
+            << " computed=[" << serialize_vec(final_nozzle_maps) << "]"
+            << " (sz=" << final_nozzle_maps.size() << ")");
+    }
+    if (!maps_changed && !volume_changed && !nozzle_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD all maps unchanged (idempotent) f_maps_sz=" << f_maps.size());
+    }
+
     if (maps_changed || volume_changed || nozzle_changed) {
         VORTEK_LOG(warn, "update_filament_maps_to_config: maps changed, applying to full configs...");
 
@@ -517,6 +549,14 @@ void PrintHooks::update_filament_maps_to_config(
             print.m_full_print_config.apply(filament_overrides);
             print.m_ori_full_print_config.apply(filament_overrides);
         }
+    }
+
+    // [Vortek] Sync variant-expanded keys to m_config so that the NEXT Print::apply()
+    // diff comparison (m_config vs new_full_config) finds 0 diffs for these keys.
+    // See VortekConfigSync.hpp for full architecture documentation.
+    {
+        Vortek::ConfigSync sync(print);
+        sync.sync_baseline();
     }
 }
 

@@ -1176,8 +1176,15 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         m_ori_full_print_config = new_full_config;
         new_full_config.update_values_to_printer_extruders_for_multiple_filaments(new_full_config, filament_options_with_variant,  "filament_self_index", "filament_extruder_variant");
 
+        // [Vortek] H2C: override upstream variant expansion with BBS-style nozzle_group_result mapping.
+        // On second apply (after slicing computed nozzle groups), replaces upstream expansion
+        // with update_filament_config_values_for_multiple_extruders using the dynamic nozzle map.
+        // No-op for non-H2C printers and on first apply (no group result yet).
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
+        Vortek::PlateMapping::override_filament_variant_expansion(*this, new_full_config, m_ori_full_print_config);
+
         // Vortek: restore correct variant filament overrides for H2C print configuration
-        Vortek::PlateMapping::restore_filament_variant_overrides_h2c(new_full_config, m_ori_full_print_config);
+        Vortek::PlateMapping::restore_filament_variant_overrides_h2c(*this, new_full_config);
     }
     // else {
     //     int extruder_count;
@@ -1192,9 +1199,9 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     auto opt_filament_map = new_full_config.option<ConfigOptionInts>("filament_map");
     std::vector<int> filament_maps = opt_filament_map ? opt_filament_map->values : std::vector<int>();
 
-    // Vortek: apply filament overrides directly to new_full_config's retract keys
-    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1357-1361 (update_filament_config_values_for_multiple_extruders)
-    Vortek::PlateMapping::apply_filament_retract_overrides(new_full_config, filament_maps);
+    // [Vortek] apply_filament_retract_overrides removed: the BBS-style variant expansion in
+    // override_filament_variant_expansion now handles retract key resolution correctly,
+    // making the separate retract override unnecessary (it caused double apply_override → false diffs).
 
     // Find modified keys of the various configs. Resolve overrides extruder retract values by filament profiles.
     DynamicPrintConfig   filament_overrides;

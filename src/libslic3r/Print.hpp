@@ -32,6 +32,7 @@ namespace Vortek {
     class PlateMapping;
     class GroupReorder;
     class PrintHooks;
+    class ConfigSync;
 }
 
 namespace Slic3r {
@@ -1171,6 +1172,7 @@ private:
     friend class ::Vortek::PlateMapping;
     friend class ::Vortek::GroupReorder;
     friend class ::Vortek::PrintHooks;
+    friend class ::Vortek::ConfigSync;
     PrintObjectPtrs                         m_objects;
     PrintRegionPtrs                         m_print_regions;
     

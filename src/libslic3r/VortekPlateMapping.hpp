@@ -158,16 +158,25 @@ public:
         Slic3r::DynamicPrintConfig& full_print_config,
         const Slic3r::DynamicPrintConfig& new_full_config);
 
-    /**
-     * @brief Applies filament overrides to machine configuration retract options.
-     */
-    static void apply_filament_retract_overrides(
-        Slic3r::DynamicPrintConfig& new_full_config,
-        const std::vector<int>& filament_maps);
 
-    static void restore_filament_variant_overrides_h2c(
+    /**
+     * @brief Overrides upstream filament variant expansion with BBS-style nozzle_group_result mapping.
+     *
+     * On second Print::apply() (after slicing computed nozzle groups), replaces upstream
+     * update_values_to_printer_extruders_for_multiple_filaments expansion with
+     * update_filament_config_values_for_multiple_extruders using the dynamic nozzle map.
+     * No-op for non-H2C printers and on first apply (no group result yet).
+     *
+     * Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
+     */
+    static void override_filament_variant_expansion(
+        Slic3r::Print& print,
         Slic3r::DynamicPrintConfig& new_full_config,
         const Slic3r::DynamicPrintConfig& ori_full_config);
+
+    static void restore_filament_variant_overrides_h2c(
+        Slic3r::Print& print,
+        Slic3r::DynamicPrintConfig& new_full_config);
 
     /**
      * @brief Checks if two printer models are compatible (with fallback mapping like O1C <-> O1C2).

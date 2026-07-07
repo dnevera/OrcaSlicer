@@ -473,6 +473,8 @@ set(lisbslic3r_sources
     VortekMultiNozzle.hpp
     VortekPlateMapping.cpp
     VortekPlateMapping.hpp
+    VortekConfigSync.cpp
+    VortekConfigSync.hpp
     VortekPreCooling.cpp
     VortekPreCooling.hpp
     VortekPrintHooks.cpp
