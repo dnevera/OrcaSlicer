@@ -7,7 +7,7 @@
  * @brief Global compile-time switch for Vortek logging.
  * Set to 1 to enable logging, or 0 to completely compile out all Vortek logs.
  */
-#define VORTEK_LOGGING_ENABLED 1
+#define VORTEK_LOGGING_ENABLED 0
 
 #if VORTEK_LOGGING_ENABLED
     /**
@@ -31,7 +31,7 @@
 //   - VortekPrintHooks:  injects nvtHighFlow into filament_volume_map  (ASSIGNMENT)
 // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp – Hybrid nozzle slot assignment
 // ---------------------------------------------------------------------------
-static constexpr bool VORTEK_DEBUG_HF_NOZZLE_OVERRIDE       = true;  // [DEBUG] Enable for HF pipeline test, disable before release
+static constexpr bool VORTEK_DEBUG_HF_NOZZLE_OVERRIDE       = false;  // [DEBUG] Enable for HF pipeline test, disable before release
 static constexpr int  VORTEK_DEBUG_HF_NOZZLE_OVERRIDE_COUNT = 1;     // [DEBUG] HF nozzle slots to carve out of Right carousel.
                                                                        //   Total slots N is kept invariant: Std = N-COUNT, HF = COUNT.
                                                                        //   In debug mode: FIRST COUNT Right filaments → nvtHighFlow.
