@@ -11,10 +11,12 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "libslic3r/VortekMultiNozzle.hpp"
 #include "libslic3r/VortekLog.hpp"
+#include "libslic3r/VortekKeys.hpp"
 #include "slic3r/GUI/PartPlate.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/Widgets/MultiNozzleSync.hpp"
 #include "libslic3r/VortekPrintHooks.hpp"
+#include "VortekVolumeMapSync.hpp"
 #include <mutex>
 
 #include <map>
@@ -31,6 +33,7 @@
 // ---------------------------------------------------------------------------
 
 namespace Vortek {
+
 
 namespace DeviceHooks {
 
@@ -497,7 +500,7 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
             if (!added) {
                 // If no nozzles are found, write 1 default nozzle of the type from preset
                 Slic3r::NozzleVolumeType def_type = Slic3r::nvtStandard;
-                auto* nozzle_volume_type_opt = static_cast<const Slic3r::ConfigOptionEnumsGeneric*>(current_printer.config.option("nozzle_volume_type"));
+                auto* nozzle_volume_type_opt = static_cast<const Slic3r::ConfigOptionEnumsGeneric*>(current_printer.config.option(Vortek::Keys::k_nozzle_volume_type));
                 if (nozzle_volume_type_opt && eid < (int)nozzle_volume_type_opt->values.size()) {
                     def_type = static_cast<Slic3r::NozzleVolumeType>(nozzle_volume_type_opt->values[eid]);
                 }
@@ -557,26 +560,23 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
             //   BBS does: update_filament_volume_map(extruder_id, new_type)
             //   For H2C Hybrid carousel: we rebuild per-slot from HF count.
             auto* plater = Slic3r::GUI::wxGetApp().plater();
-            auto& plate_list = plater->get_partplate_list();
 
             // Get nozzle_volume_type per extruder from project_config.
             // This determines the user-configured mode for each extruder (Standard/HighFlow/Hybrid).
             // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1577-1582
             //   BBS: update_filament_volume_map(extruder_id, new_type) respects the type directly.
             //   For H2C: nozzle_volume_type is the user-configured mode, not derived from stats.
-            auto* nvt_opt = preset_bundle.project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
+            auto* nvt_opt = preset_bundle.project_config.option<Slic3r::ConfigOptionEnumsGeneric>(Vortek::Keys::k_nozzle_volume_type);
 
             // Get new HF counts per extruder from updated extruder_nozzle_stat
             std::vector<int> hf_counts(num_extruders, 0);
             for (int eid = 0; eid < num_extruders; ++eid)
                 hf_counts[eid] = stat.get_extruder_nozzle_count(eid, Slic3r::nvtHighFlow);
 
-            for (int idx = 0; idx < plate_list.get_plate_count(); ++idx) {
-                auto plate = plate_list.get_plate(idx);
-                if (!plate) continue;
+            VolumeMapSync::for_each_plate(plater, [&](Slic3r::GUI::PartPlate* plate, int idx) {
                 auto f_maps = plate->get_filament_maps();
                 auto f_volume_maps = plate->get_filament_volume_maps();
-                if (f_maps.empty()) continue;
+                if (f_maps.empty()) return;
 
                 // Resize volume map to match filament count if needed
                 if ((int)f_volume_maps.size() < (int)f_maps.size())
@@ -629,19 +629,17 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                                          ? static_cast<int>(Slic3r::nvtHighFlow)
                                          : static_cast<int>(Slic3r::nvtStandard);
 
-                        if (is_manual_mode && f_volume_maps[fidx] != 0) {
-                            // User explicitly assigned this filament (HF or Std) in FilamentMapDialog.
-                            // plate_config.filament_volume_map is the single source of truth in Manual mode.
-                            // Only invalidate if the requested HF nozzle no longer physically exists.
-                            // Reference: VortekDeviceHooks.cpp update_filament_volume_map
+                        if (is_manual_mode) {
+                            // Manual mode: ALL plate volume_map values are user-authoritative.
+                            // 0 (nvtStandard) is a VALID user choice, NOT "unset".
+                            // Only invalidate HF choices when HF nozzle physically removed.
+                            // Reference to BBS: plate_config is single source of truth in Manual.
                             if (f_volume_maps[fidx] == static_cast<int>(Slic3r::nvtHighFlow) && hf_count == 0) {
-                                // HF nozzle physically removed from rack — force reset to Standard
                                 vol = static_cast<int>(Slic3r::nvtStandard);
                                 VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
                                            << " filament=" << fidx
                                            << " user HF choice INVALIDATED (no HF nozzle in rack)");
                             } else {
-                                // User choice is physically valid — preserve it unchanged
                                 vol = f_volume_maps[fidx];
                                 VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
                                            << " filament=" << fidx
@@ -665,7 +663,7 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
 
                 plate->set_filament_volume_maps(f_volume_maps);
                 plate->update_slice_result_valid_state(false);
-            }
+            });
             plater->set_plater_dirty(true);
             VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: volume_map rebuilt on all plates after nozzle swap");
         }
@@ -1394,239 +1392,7 @@ bool parse_hybrid_extruder_selection(
     return false;
 }
 
-// ---------------------------------------------------------------------------
-// update_filament_volume_map
-// ---------------------------------------------------------------------------
-// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map
-// Updates the plates' filament volume types when the extruder's volume type changes.
-// H2C-only: non-H2C printers exit immediately.
-// ---------------------------------------------------------------------------
-void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, int volume_type)
-{
-    if (!plater || !Slic3r::GUI::wxGetApp().preset_bundle) return;
-    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) {
-        return;
-    }
 
-    // nvtHybrid (2) means this extruder has mixed Std/HF carousel slots.
-    // Per-filament assignment is user-controlled via Filament Grouping dialog.
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map
-    //
-    // Logic:
-    //   • If plate already has a MIXED map (both 0 and 1 values for this extruder) →
-    //     preserve it (user's dialog choices, or previous Hybrid state). No override.
-    //   • If plate has a UNIFORM map (all-Std or all-HF, i.e. switching back from pure mode) →
-    //     reset to all-Std (BBS default for Hybrid start). User can reassign in dialog.
-    //   • If plate is EMPTY → nothing to do, Step 2b auto-assigns at slicing time.
-    if (volume_type == static_cast<int>(Slic3r::NozzleVolumeType::nvtHybrid)) {
-        auto& partplate_list = plater->get_partplate_list();
-        for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
-            auto plate = partplate_list.get_plate(idx);
-            if (!plate) continue;
-            auto filament_map = plate->get_filament_maps();
-            auto filament_volume_map = plate->get_filament_volume_maps();
-            if (filament_map.empty() || filament_volume_map.empty()) continue;
-            // Check if current volume map for this extruder is already mixed
-            bool has_std = false, has_hf = false;
-            for (size_t i = 0; i < filament_map.size(); ++i) {
-                if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
-                    if (filament_volume_map[i] == 0) has_std = true;
-                    if (filament_volume_map[i] == 1) has_hf  = true;
-                }
-            }
-            if (has_std && has_hf) {
-                // Already mixed → preserve user assignments
-                VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
-                           << " already has mixed Hybrid map → preserving");
-            } else {
-                // Uniform (all-Std or all-HF) → switching to Hybrid from pure mode.
-                // Reset to all-Std so dialog opens fresh. BBS pattern.
-                bool changed = false;
-                for (size_t i = 0; i < filament_map.size(); ++i) {
-                    if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
-                        if (filament_volume_map[i] != 0) { filament_volume_map[i] = 0; changed = true; }
-                    }
-                }
-                if (changed) {
-                    plate->set_filament_volume_maps(filament_volume_map);
-                    VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
-                               << " was uniform → reset to all-Std for Hybrid (BBS pattern)");
-                }
-            }
-        }
-        return;
-    }
-
-    // For non-Hybrid extruders (pure Standard or pure HighFlow): set all filaments
-    // on this extruder to the extruder's single volume type.
-    int selected_volume_type = volume_type;
-
-    auto& partplate_list = plater->get_partplate_list();
-    for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
-        auto plate = partplate_list.get_plate(idx);
-        if (!plate) continue;
-        auto filament_map = plate->get_filament_maps();
-        auto filament_volume_map = plate->get_filament_volume_maps();
-        
-        if (filament_map.empty()) continue;
-        if (filament_volume_map.size() < filament_map.size()) {
-            filament_volume_map.resize(filament_map.size(), 0);
-        }
-        
-        bool changed = false;
-        for (size_t i = 0; i < filament_map.size(); ++i) {
-            if (filament_map[i] == extruder_id + 1) {
-                if (filament_volume_map[i] != selected_volume_type) {
-                    filament_volume_map[i] = selected_volume_type;
-                    changed = true;
-                }
-            }
-        }
-        if (changed) {
-            plate->set_filament_volume_maps(filament_volume_map);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// on_extruder_volume_type_changed
-// ---------------------------------------------------------------------------
-// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: set_extruder_volume_type
-// Triggers local nozzle status updates, filament volume maps updates,
-// and refreshes the multi-nozzle count displays.
-// H2C-only: non-H2C printers exit immediately.
-// ---------------------------------------------------------------------------
-void on_extruder_volume_type_changed(Slic3r::PresetBundle* preset_bundle, int extruder_id, Slic3r::NozzleVolumeType type)
-{
-    if (!preset_bundle) return;
-    if (!Vortek::is_h2c_printer(preset_bundle)) {
-        return;
-    }
-
-    preset_bundle->extruder_nozzle_stat.on_volume_type_switch(extruder_id, type);
-    if (Slic3r::GUI::wxGetApp().plater()) {
-        update_filament_volume_map(Slic3r::GUI::wxGetApp().plater(), extruder_id, static_cast<int>(type));
-    }
-    Slic3r::GUI::updateNozzleCountDisplay(preset_bundle, extruder_id, type);
-}
-
-// ---------------------------------------------------------------------------
-// sync_extruder_nozzle_stats_on_preset_select
-// ---------------------------------------------------------------------------
-// Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: select_preset
-// Loads prev_nozzle_volume_type from config and synchronizes both nozzle
-// volume types and filament volume maps for H2C printers.
-// H2C-only: non-H2C printers exit immediately.
-// ---------------------------------------------------------------------------
-void sync_extruder_nozzle_stats_on_preset_select(Slic3r::PresetBundle* preset_bundle, const std::string& base_preset_name)
-{
-    if (!preset_bundle) return;
-    if (!Vortek::is_h2c_printer(preset_bundle)) {
-        return;
-    }
-
-    std::string prev_nozzle_volume_type = Slic3r::GUI::wxGetApp().app_config->get_nozzle_volume_types_from_config(base_preset_name);
-    if (prev_nozzle_volume_type.empty()) {
-        prev_nozzle_volume_type = "Standard,Hybrid";
-    }
-    bool use_default = true;
-    if (!prev_nozzle_volume_type.empty()) {
-        auto* nozzle_volume_type_option = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type");
-        if (nozzle_volume_type_option && nozzle_volume_type_option->deserialize(prev_nozzle_volume_type)) {
-            for (size_t idx = 0; idx < nozzle_volume_type_option->size(); ++idx) {
-                Slic3r::NozzleVolumeType volume_type = Slic3r::NozzleVolumeType(nozzle_volume_type_option->values[idx]);
-                preset_bundle->extruder_nozzle_stat.on_volume_type_switch(idx, volume_type);
-                if (Slic3r::GUI::wxGetApp().plater()) {
-                    update_filament_volume_map(Slic3r::GUI::wxGetApp().plater(), idx, static_cast<int>(volume_type));
-                }
-                Slic3r::GUI::updateNozzleCountDisplay(preset_bundle, idx, volume_type);
-            }
-            use_default = false;
-        }
-    }
-
-    if (use_default) {
-        auto* default_nozzle_volume_opt = preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("default_nozzle_volume_type");
-        if (default_nozzle_volume_opt) {
-            auto default_nozzle_volume_type = default_nozzle_volume_opt->values;
-            for (size_t eid = 0; eid < default_nozzle_volume_type.size(); ++eid) {
-                auto type = Slic3r::NozzleVolumeType(default_nozzle_volume_type[eid]);
-                preset_bundle->extruder_nozzle_stat.on_volume_type_switch(eid, type);
-                if (Slic3r::GUI::wxGetApp().plater()) {
-                    update_filament_volume_map(Slic3r::GUI::wxGetApp().plater(), eid, static_cast<int>(type));
-                }
-                Slic3r::GUI::updateNozzleCountDisplay(preset_bundle, eid, type);
-            }
-            preset_bundle->project_config.option<Slic3r::ConfigOptionEnumsGeneric>("nozzle_volume_type")->values = default_nozzle_volume_type;
-        }
-    }
-}
-
-void save_filament_volume_maps_hook(
-    Slic3r::GUI::Plater* plater,
-    Slic3r::GUI::PartPlate* plate,
-    bool sync_plate,
-    bool is_slice_all,
-    Slic3r::FilamentMapMode mode,
-    const std::vector<int>& volume_map)
-{
-    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return;
-
-    // project_config write: only in Manual mode (user explicitly set per-filament HF/Std).
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
-    if (mode == Slic3r::fmmManual) {
-        auto* opt_vm = Slic3r::GUI::wxGetApp().preset_bundle->project_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true);
-        if (opt_vm) {
-            opt_vm->values = volume_map;
-        }
-    }
-
-    // plate write: always save (BBS saves volume_map regardless of mode).
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp:218,226 – set_filament_volume_maps unconditional
-    if (sync_plate && plate) {
-        if (is_slice_all) {
-            auto plate_list = plater->get_partplate_list().get_plate_list();
-            for (int i = 0; i < plate_list.size(); ++i) {
-                plate_list[i]->set_filament_volume_maps(volume_map);
-            }
-        } else {
-            plate->set_filament_volume_maps(volume_map);
-        }
-    }
-}
-
-bool check_volume_maps_changed_hook(
-    const Slic3r::GUI::PartPlate* plate,
-    const Slic3r::DynamicConfig& g_config,
-    const std::vector<int>& new_volume_map)
-{
-    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return false;
-
-    auto old_maps = plate->get_filament_volume_maps();
-    if (old_maps.empty()) {
-        auto* opt_vm = g_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
-        if (opt_vm) {
-            old_maps = opt_vm->values;
-        }
-    }
-    return old_maps != new_volume_map;
-}
-
-std::vector<int> get_real_filament_volume_maps(
-    const Slic3r::GUI::PartPlate* plate,
-    const Slic3r::DynamicConfig& g_config)
-{
-    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return {};
-
-    auto old_maps = plate->get_filament_volume_maps();
-    if (old_maps.empty()) {
-        auto* opt_vm = g_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
-        if (opt_vm) {
-            old_maps = opt_vm->values;
-        }
-    }
-    return old_maps;
-}
 
 
 } // namespace DeviceHooks

@@ -2,6 +2,7 @@
 #include "Model.hpp"
 #include "Print.hpp"
 #include "VortekPlateMapping.hpp"
+#include "VortekConfigSync.hpp"
 
 #include <boost/log/trivial.hpp>
 #include <cfloat>
@@ -1176,8 +1177,12 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         m_ori_full_print_config = new_full_config;
         new_full_config.update_values_to_printer_extruders_for_multiple_filaments(new_full_config, filament_options_with_variant,  "filament_self_index", "filament_extruder_variant");
 
-        // Vortek: restore correct variant filament overrides for H2C print configuration
-        Vortek::PlateMapping::restore_filament_variant_overrides_h2c(new_full_config, m_ori_full_print_config);
+        // [Vortek] H2C: override upstream variant expansion with BBS-style nozzle_group_result mapping.
+        // On second apply (after slicing computed nozzle groups), replaces upstream expansion
+        // with update_filament_config_values_for_multiple_extruders using the dynamic nozzle map.
+        // No-op for non-H2C printers and on first apply (no group result yet).
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
+        Vortek::PlateMapping::override_filament_variant_expansion(*this, new_full_config, m_ori_full_print_config);
     }
     // else {
     //     int extruder_count;
@@ -1189,12 +1194,15 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     //     }
     // }
 
-    auto opt_filament_map = new_full_config.option<ConfigOptionInts>("filament_map");
-    std::vector<int> filament_maps = opt_filament_map ? opt_filament_map->values : std::vector<int>();
+    // [Vortek] H2C: use variant indices (filament_map_2) for apply_override so that
+    // retract keys get correct HF-variant values. Standard printers fall through to filament_map.
+    // This fixes root cause of WipeTower/GCode reading wrong retract values for HF filaments.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp
+    std::vector<int> filament_maps = Vortek::ConfigSync::get_override_indices(new_full_config);
 
-    // Vortek: apply filament overrides directly to new_full_config's retract keys
-    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1357-1361 (update_filament_config_values_for_multiple_extruders)
-    Vortek::PlateMapping::apply_filament_retract_overrides(new_full_config, filament_maps);
+    // [Vortek] apply_filament_retract_overrides removed: the BBS-style variant expansion in
+    // override_filament_variant_expansion now handles retract key resolution correctly,
+    // making the separate retract override unnecessary (it caused double apply_override → false diffs).
 
     // Find modified keys of the various configs. Resolve overrides extruder retract values by filament profiles.
     DynamicPrintConfig   filament_overrides;
@@ -1204,8 +1212,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     // [Vortek] Filter out derived computed keys that should not trigger re-slice
     Vortek::PlateMapping::filter_reslice_diffs(*this, new_full_config, print_diff, full_config_diff);
-    // [Vortek] Filter variant-transformed keys that diverge mid-slice (H2C multi-nozzle only)
-    Vortek::PlateMapping::filter_full_config_diff(full_config_diff, m_config);
+    // [Vortek] Sync computed keys (suppressed from print_diff) directly into m_config
+    Vortek::PlateMapping::sync_suppressed_to_config(m_config, new_full_config);
 
     // [Vortek DIAG] Log diff keys and values for re-slice debugging
     Vortek::PlateMapping::diag_log_config_diffs("print_diff", print_diff, m_config, new_full_config);
@@ -1217,8 +1225,6 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     //BBS: process the filament_map related logic
     std::unordered_set<std::string> print_diff_set(print_diff.begin(), print_diff.end());
-    // [Vortek] Filter computed map keys from print_diff to prevent sync_after_slicing re-slice loop
-    Vortek::PlateMapping::filter_print_diff_set(print_diff_set, m_config, m_full_print_config, new_full_config);
     if (print_diff_set.find("filament_map_mode") == print_diff_set.end())
     {
         FilamentMapMode map_mode = new_full_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value;

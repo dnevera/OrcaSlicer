@@ -1,7 +1,9 @@
 #include "VortekPrintHooks.hpp"
+#include "VortekConfigSync.hpp"
 #include "Print.hpp"
 #include "PrintConfig.hpp"
 #include "VortekLog.hpp"
+#include "VortekKeys.hpp"
 #include "VortekGroupReorder.hpp"
 #include "PresetBundle.hpp"
 #include "AppConfig.hpp"
@@ -72,7 +74,7 @@ void PrintHooks::update_filament_config_values_for_multiple_extruders(
     auto opt_extruder_type      = dynamic_cast<const Slic3r::ConfigOptionEnumsGeneric *>(printer_config.option("extruder_type"));
     auto opt_nozzle_volume_type = dynamic_cast<const Slic3r::ConfigOptionEnumsGeneric *>(printer_config.option("nozzle_volume_type"));
 
-    auto             opt_filament_volume_maps = dynamic_cast<const Slic3r::ConfigOptionInts *>(printer_config.option("filament_volume_map"));
+    auto             opt_filament_volume_maps = dynamic_cast<const Slic3r::ConfigOptionInts *>(printer_config.option(Vortek::Keys::k_filament_volume_map));
     std::vector<int> filament_volume_maps;
     if (opt_filament_volume_maps) filament_volume_maps = opt_filament_volume_maps->values;
     auto             opt_ids = id_name.empty() ? nullptr : dynamic_cast<const Slic3r::ConfigOptionInts *>(printer_config.option(id_name));
@@ -271,24 +273,31 @@ void PrintHooks::update_filament_maps_to_config(
     // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp   – get_extruder_nozzle_stats
     std::vector<int> final_volume_maps = f_volume_maps;
 
+    // Detect Manual mode: user-set volume_map must be respected, never auto-computed.
+    bool is_manual_mode = false;
+    if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionEnum<Slic3r::FilamentMapMode>>("filament_map_mode"))
+        is_manual_mode = (opt->value == Slic3r::fmmManual);
+
     // When called from the single-arg path (Print.cpp:3241), f_volume_maps is empty.
-    // Before falling back to auto-assignment, check if m_full_print_config already has a
-    // user-set volume_map (e.g. from manual filament→HF assignment in FilamentMapDialog).
+    // In Manual mode: ALWAYS use existing volume_map from m_full_print_config.
     // User assignment is saved to project_config → flows into m_full_print_config via Print::apply().
-    // Respecting it here is what makes manual binding persist through reslice.
-    // Only auto-assign if there is truly no existing map (empty) — all-zeros [0,0,...] from
-    // m_config means "never set", but a mix of 0 and 1 means user intentionally set some HF.
+    // Auto-computing would overwrite user's explicit HF/STD choices → oscillation.
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
     if (final_volume_maps.empty() && !f_maps.empty()) {
-        // Try to recover from m_full_print_config (user assignment from dialog)
-        auto* existing_opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+        auto* existing_opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
         if (existing_opt && !existing_opt->values.empty() && (int)existing_opt->values.size() == (int)f_maps.size()) {
-            bool has_hf = false;
-            for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
-            if (has_hf) {
-                // User has explicitly assigned some filaments to HF — preserve their choice.
+            if (is_manual_mode) {
+                // Manual mode: ALWAYS respect user-set volume_map, even if all-zeros.
                 final_volume_maps = existing_opt->values;
-                VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
+                VORTEK_LOG(warn, "update_filament_maps_to_config: Manual mode — using user-set volume_map (no auto-compute)");
+            } else {
+                // Auto mode: only recover if user has explicitly assigned some HF.
+                bool has_hf = false;
+                for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
+                if (has_hf) {
+                    final_volume_maps = existing_opt->values;
+                    VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
+                }
             }
         }
     }
@@ -300,7 +309,7 @@ void PrintHooks::update_filament_maps_to_config(
         // Parse extruder_nozzle_stats to know per-extruder HF nozzle count.
         // VortekDeviceHooks writes this from physical carousel slot flow types,
         // e.g. "Standard#4|HighFlow#1" when one carousel slot has an HF nozzle.
-        auto opt_stats = print.m_full_print_config.option<Slic3r::ConfigOptionStrings>("extruder_nozzle_stats");
+        auto opt_stats = print.m_full_print_config.option<Slic3r::ConfigOptionStrings>(Vortek::Keys::k_extruder_nozzle_stats);
         std::vector<std::string> stats_values = opt_stats ? opt_stats->values : std::vector<std::string>();
         auto nozzle_stats = Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(stats_values);
 
@@ -381,7 +390,7 @@ void PrintHooks::update_filament_maps_to_config(
         for (size_t i = 0; i < f_maps.size(); ++i) {
             used_filaments.push_back(i);
         }
-        auto opt_stats = print.m_full_print_config.option<Slic3r::ConfigOptionStrings>("extruder_nozzle_stats");
+        auto opt_stats = print.m_full_print_config.option<Slic3r::ConfigOptionStrings>(Vortek::Keys::k_extruder_nozzle_stats);
         std::vector<std::string> stats_values = opt_stats ? opt_stats->values : std::vector<std::string>();
         auto nozzle_stats = Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(stats_values);
 
@@ -419,6 +428,37 @@ void PrintHooks::update_filament_maps_to_config(
     bool nozzle_changed = (!final_nozzle_maps.empty() &&
                            print.config().filament_nozzle_map.values != final_nozzle_maps);
 
+    // [Vortek DIAG] Log what specifically changed in the idempotency guard
+    auto serialize_vec = [](const std::vector<int>& v) -> std::string {
+        std::string s;
+        for (int x : v) { if (!s.empty()) s += ","; s += std::to_string(x); }
+        return s.empty() ? "<empty>" : s;
+    };
+    if (maps_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_map.values) << "]"
+            << " (sz=" << print.config().filament_map.values.size() << ")"
+            << " computed=[" << serialize_vec(f_maps) << "]"
+            << " (sz=" << f_maps.size() << ")");
+    }
+    if (volume_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_volume_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_volume_map.values) << "]"
+            << " (sz=" << print.config().filament_volume_map.values.size() << ")"
+            << " computed=[" << serialize_vec(final_volume_maps) << "]"
+            << " (sz=" << final_volume_maps.size() << ")");
+    }
+    if (nozzle_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD filament_nozzle_map CHANGED:"
+            << " m_config=[" << serialize_vec(print.config().filament_nozzle_map.values) << "]"
+            << " (sz=" << print.config().filament_nozzle_map.values.size() << ")"
+            << " computed=[" << serialize_vec(final_nozzle_maps) << "]"
+            << " (sz=" << final_nozzle_maps.size() << ")");
+    }
+    if (!maps_changed && !volume_changed && !nozzle_changed) {
+        VORTEK_LOG(warn, "IDEM_GUARD all maps unchanged (idempotent) f_maps_sz=" << f_maps.size());
+    }
+
     if (maps_changed || volume_changed || nozzle_changed) {
         VORTEK_LOG(warn, "update_filament_maps_to_config: maps changed, applying to full configs...");
 
@@ -432,10 +472,10 @@ void PrintHooks::update_filament_maps_to_config(
         }
 
         if (volume_changed) {
-            if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true)) {
+            if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map, true)) {
                 opt->values = final_volume_maps;
             }
-            if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true)) {
+            if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map, true)) {
                 opt->values = final_volume_maps;
             }
             // H2C: also sync to m_config (typed PrintConfig) so that 3MF export reads the correct
@@ -447,10 +487,10 @@ void PrintHooks::update_filament_maps_to_config(
 
         if (nozzle_changed) {
             VORTEK_LOG(warn, "update_filament_maps_to_config: applying filament_nozzle_map to full configs");
-            if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map", true)) {
+            if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map, true)) {
                 opt->values = final_nozzle_maps;
             }
-            if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map", true)) {
+            if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map, true)) {
                 opt->values = final_nozzle_maps;
             }
             // H2C: also sync to m_config directly (same reason as filament_volume_map above).
@@ -490,33 +530,24 @@ void PrintHooks::update_filament_maps_to_config(
         }
 
         std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
-        filament_keys.insert("filament_self_index");
+        filament_keys.insert(Vortek::Keys::k_filament_self_index);
         update_filament_config_values_for_multiple_extruders(
             print.m_full_print_config, filament_extruder_map,
             extruder_count, extruder_count + 1, // ensure extruder_volume_type_count > extruder_count
-            filament_keys, "filament_self_index", "filament_extruder_variant");
+            filament_keys, Vortek::Keys::k_filament_self_index, Vortek::Keys::k_filament_extruder_variant);
 
-        const std::vector<std::string>& extruder_retract_keys = Slic3r::print_config_def.extruder_retract_keys();
-        const std::string               filament_prefix       = "filament_";
-        Slic3r::t_config_option_keys    print_diff;
-        Slic3r::DynamicPrintConfig      filament_overrides;
+        // [Vortek] Apply retract overrides using correct variant indices (filament_map_2).
+        // Shared helper: replaces duplicated compute_filament_override_value loop.
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp (compute_filament_override_value)
+        Vortek::ConfigSync::apply_retract_overrides(print);
+    }
 
-        for (auto& opt_key : extruder_retract_keys) {
-            const Slic3r::ConfigOption* opt_new_filament = print.m_full_print_config.option(filament_prefix + opt_key);
-            const Slic3r::ConfigOption* opt_new_machine  = print.m_full_print_config.option(opt_key);
-            const Slic3r::ConfigOption* opt_old_machine  = print.m_full_print_config.option(opt_key);
-            if (opt_new_filament)
-                Slic3r::compute_filament_override_value(opt_key, opt_old_machine, opt_new_machine,
-                    opt_new_filament, print.m_full_print_config, print_diff, filament_overrides,
-                    print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_map_2")->values);
-        }
-
-        if (!print_diff.empty()) {
-            print.m_placeholder_parser.apply_config(filament_overrides);
-            // Apply directly to full configs instead of m_config to prevent invalidation loop
-            print.m_full_print_config.apply(filament_overrides);
-            print.m_ori_full_print_config.apply(filament_overrides);
-        }
+    // [Vortek] Sync variant-expanded keys to m_config so that the NEXT Print::apply()
+    // diff comparison (m_config vs new_full_config) finds 0 diffs for these keys.
+    // See VortekConfigSync.hpp for full architecture documentation.
+    {
+        Vortek::ConfigSync sync(print);
+        sync.sync_baseline();
     }
 }
 
@@ -532,10 +563,10 @@ void PrintHooks::update_to_config_by_nozzle_group_result(
     const auto* layered_result = dynamic_cast<const Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult*>(&group_result);
     if (layered_result) {
         std::vector<int> nozzle_map = layered_result->get_nozzle_map(-1);
-        if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map", true)) {
+        if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map, true)) {
             opt->values = nozzle_map;
         }
-        if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map", true)) {
+        if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map, true)) {
             opt->values = nozzle_map;
         }
         VORTEK_LOG(warn, "update_to_config_by_nozzle_group_result: updated filament_nozzle_map in full configs");
@@ -564,29 +595,14 @@ void PrintHooks::update_to_config_by_nozzle_group_result(
 
     print.m_full_print_config = print.m_ori_full_print_config;
     std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
-    filament_keys.insert("filament_self_index");
+    filament_keys.insert(Vortek::Keys::k_filament_self_index);
     update_filament_config_values_for_multiple_extruders(print.m_full_print_config, filament_extruder_map, extruder_count, extruder_volume_type_count,
-                                                          filament_keys, "filament_self_index", "filament_extruder_variant");
+                                                          filament_keys, Vortek::Keys::k_filament_self_index, Vortek::Keys::k_filament_extruder_variant);
 
-    const std::vector<std::string> &extruder_retract_keys = Slic3r::print_config_def.extruder_retract_keys();
-    const std::string               filament_prefix       = "filament_";
-    Slic3r::t_config_option_keys            print_diff;
-    Slic3r::DynamicPrintConfig              filament_overrides;
-    for (auto &opt_key : extruder_retract_keys) {
-        const Slic3r::ConfigOption *opt_new_filament = print.m_full_print_config.option(filament_prefix + opt_key);
-        const Slic3r::ConfigOption *opt_new_machine  = print.m_full_print_config.option(opt_key);
-        const Slic3r::ConfigOption *opt_old_machine  = print.m_full_print_config.option(opt_key);
-
-        if (opt_new_filament)
-            Slic3r::compute_filament_override_value(opt_key, opt_old_machine, opt_new_machine, opt_new_filament, print.m_full_print_config, print_diff, filament_overrides,
-                                            print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_map_2")->values);
-    }
-
-    if (!print_diff.empty()) {
-        print.m_placeholder_parser.apply_config(filament_overrides);
-        print.m_full_print_config.apply(filament_overrides);
-        print.m_ori_full_print_config.apply(filament_overrides);
-    }
+    // [Vortek] Apply retract overrides using correct variant indices (filament_map_2).
+    // Shared helper: replaces duplicated compute_filament_override_value loop.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp (compute_filament_override_value)
+    Vortek::ConfigSync::apply_retract_overrides(print);
 }
 
 #ifndef L
@@ -598,25 +614,25 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     using namespace Slic3r;
     VORTEK_LOG(warn, "init_vortek_params: registering 18 Vortek configuration parameters");
 
-    ConfigOptionDef* def = def_ptr->add("extruder_max_nozzle_count", coInts);
+    ConfigOptionDef* def = def_ptr->add(Vortek::Keys::k_extruder_max_nozzle_count, coInts);
     def->mode = comDevelop;
     def->nullable = true;
     def->set_default_value(new ConfigOptionIntsNullable{ 1 });
 
-    def = def_ptr->add("extruder_nozzle_stats", coStrings);
+    def = def_ptr->add(Vortek::Keys::k_extruder_nozzle_stats, coStrings);
     def->set_default_value(new ConfigOptionStrings { });
 
-    def = def_ptr->add("enable_filament_dynamic_map", coBool);
+    def = def_ptr->add(Vortek::Keys::k_enable_filament_dynamic_map, coBool);
     def->label = "Enable filament dynamic map";
     def->tooltip = "Support filament map to different nozzle";
     def->set_default_value(new ConfigOptionBool{ false });
 
-    def = def_ptr->add("has_filament_switcher", coBool);
+    def = def_ptr->add(Vortek::Keys::k_has_filament_switcher, coBool);
     def->label = "Has filament switcher";
     def->tooltip = "Whether a filament switcher is connected to the printer";
     def->set_default_value(new ConfigOptionBool{ false });
 
-    def = def_ptr->add("prime_volume_mode", coEnum);
+    def = def_ptr->add(Vortek::Keys::k_prime_volume_mode, coEnum);
     def->enum_values.push_back("Default");
     def->enum_values.push_back("Saving");
     def->enum_values.push_back("Fast");
@@ -626,7 +642,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->enum_keys_map = &ConfigOptionEnum<PrimeVolumeMode>::get_enum_values();
     def->set_default_value(new ConfigOptionEnum<PrimeVolumeMode>{ PrimeVolumeMode::pvmDefault });
 
-    def = def_ptr->add("machine_hotend_change_time", coFloat);
+    def = def_ptr->add(Vortek::Keys::k_machine_hotend_change_time, coFloat);
     def->label = L("Hotend change time");
     def->tooltip = L("Time to change hotend.");
     def->sidetext = L("s");
@@ -634,33 +650,33 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.0));
 
-    def = def_ptr->add("hotend_cooling_rate", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_hotend_cooling_rate, coFloats);
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{2});
 
-    def = def_ptr->add("hotend_heating_rate", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_hotend_heating_rate, coFloats);
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{2});
 
-    def = def_ptr->add("enable_pre_heating", coBool);
+    def = def_ptr->add(Vortek::Keys::k_enable_pre_heating, coBool);
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = def_ptr->add("filament_nozzle_map", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_nozzle_map, coInts);
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionInts{1});
 
-    def = def_ptr->add("filament_volume_map", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_volume_map, coInts);
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionInts{(int)(NozzleVolumeType::nvtStandard)});
 
-    def = def_ptr->add("filament_map_2", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_map_2, coInts);
     def->label = "Filament map plus for multi nozzle";
     def->tooltip = "Filament map to the index identified by extruder and nozzle_volume_type";
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionInts{1});
 
     // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp — filament_pre_cooling_temperature
-    def = def_ptr->add("filament_pre_cooling_temperature", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_pre_cooling_temp, coInts);
     def->label = L("Extruder change");
     def->tooltip = L("To prevent oozing, the nozzle temperature will be cooled during ramming. 0 means disabled.");
     def->mode = comAdvanced;
@@ -669,7 +685,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->nullable = true;
     def->set_default_value(new ConfigOptionIntsNullable{0});
 
-    def = def_ptr->add("filament_pre_cooling_temperature_nc", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_pre_cooling_temp_nc, coInts);
     def->mode = comAdvanced;
     def->sidetext = "°C";
     def->min = 0;
@@ -677,7 +693,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->set_default_value(new ConfigOptionIntsNullable{0});
 
     // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp — filament_preheat_temperature_delta
-    def = def_ptr->add("filament_preheat_temperature_delta", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_preheat_temp_delta, coFloats);
     def->label = L("Preheat temperature delta");
     def->tooltip = L("Temperature delta applied during pre-heating before tool change.");
     def->sidetext = "°C";
@@ -685,7 +701,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{0});
 
-    def = def_ptr->add("filament_ramming_volumetric_speed_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_ramming_vol_speed_nc, coFloats);
     def->label = L("Hotend change");
     def->tooltip = L("The maximum volumetric speed for ramming before a hotend change, where -1 means using the maximum volumetric speed.");
     def->sidetext = L("mm³/s");
@@ -695,7 +711,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{-1});
 
-    def = def_ptr->add("filament_ramming_travel_time_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_ramming_travel_time_nc, coFloats);
     def->label = L("Hotend change");
     def->tooltip = L("To prevent oozing, the nozzle will perform a reverse travel movement for a certain period after the ramming is complete. The setting define the travel time.");
     def->sidetext = "s";
@@ -703,7 +719,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{0});
 
-    def = def_ptr->add("filament_change_length_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_change_length_nc, coFloats);
     def->label = L("Hotend change");
     def->tooltip = L("When changing the hotend, it is recommended to extrude a certain length of filament from the original nozzle. This helps minimize nozzle oozing.");
     def->sidetext = L("mm");
@@ -711,7 +727,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloats{10});
 
-    def = def_ptr->add("filament_prime_volume", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_prime_volume, coFloats);
     def->label = L("Filament change");
     def->tooltip = L("The volume of material required to prime the extruder on the tower, excluding a hotend change.");
     def->sidetext = L("mm³");
@@ -719,7 +735,7 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionFloats{45.});
 
-    def = def_ptr->add("filament_prime_volume_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_prime_volume_nc, coFloats);
     def->label = L("Hotend change");
     def->tooltip = L("The volume of material required to prime the extruder for a hotend change on the tower.");
     def->sidetext = L("mm³");
@@ -727,28 +743,28 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionFloats{60.});
 
-    def = def_ptr->add("filament_retract_length_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_retract_length_nc, coFloats);
     def->label = L("Nozzle Changer retraction length");
     def->tooltip = L("The length of retraction when changing a nozzle carriage");
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloats{0.0});
 
-    def = def_ptr->add("filament_retract_lift_nc", coFloats);
+    def = def_ptr->add(Vortek::Keys::k_filament_retract_lift_nc, coFloats);
     def->label = L("Nozzle Changer retract lift");
     def->tooltip = L("The Z-hop distance when changing a nozzle carriage");
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloats{0.0});
 
-    def = def_ptr->add("filament_retract_speed_nc", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_retract_speed_nc, coInts);
     def->label = L("Nozzle Changer retract speed");
     def->tooltip = L("The speed of retraction when changing a nozzle carriage");
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInts{0});
 
-    def = def_ptr->add("filament_deretract_speed_nc", coInts);
+    def = def_ptr->add(Vortek::Keys::k_filament_deretract_speed_nc, coInts);
     def->label = L("Nozzle Changer deretract speed");
     def->tooltip = L("The speed of deretraction when changing a nozzle carriage");
     def->min = 0;
@@ -758,16 +774,16 @@ void PrintHooks::init_vortek_params(Slic3r::PrintConfigDef* def_ptr)
 
 std::vector<int> PrintHooks::get_filament_nozzle_maps(const Slic3r::Print& print)
 {
-    if (is_h2c_printer(print) && print.full_print_config().has("filament_nozzle_map")) {
-        return print.full_print_config().option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
+    if (is_h2c_printer(print) && print.full_print_config().has(Vortek::Keys::k_filament_nozzle_map)) {
+        return print.full_print_config().option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values;
     }
     return {};
 }
 
 std::vector<int> PrintHooks::get_filament_volume_maps(const Slic3r::Print& print)
 {
-    if (is_h2c_printer(print) && print.full_print_config().has("filament_volume_map")) {
-        return print.full_print_config().option<Slic3r::ConfigOptionInts>("filament_volume_map")->values;
+    if (is_h2c_printer(print) && print.full_print_config().has(Vortek::Keys::k_filament_volume_map)) {
+        return print.full_print_config().option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)->values;
     }
     return {};
 }
@@ -785,9 +801,9 @@ void PrintHooks::compute_vortek_derived_maps(
     // 1. Rebuild temporary config to obtain print_extruder_id assignments
     Slic3r::DynamicPrintConfig temp_full_config = print.m_ori_full_print_config;
     std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
-    filament_keys.insert("filament_self_index");
+    filament_keys.insert(Vortek::Keys::k_filament_self_index);
     temp_full_config.update_values_to_printer_extruders_for_multiple_filaments(
-        temp_full_config, filament_keys, "filament_self_index", "filament_extruder_variant");
+        temp_full_config, filament_keys, Vortek::Keys::k_filament_self_index, Vortek::Keys::k_filament_extruder_variant);
 
     // 2. Compute filament_map_2
     out_filament_map_2.resize(f_maps.size(), 0);
@@ -827,7 +843,7 @@ void PrintHooks::compute_vortek_derived_maps(
     // This is a fixed printer property defined in fdm_bbl_3dp_002_common.json and must NOT be
     // recalculated from print_extruder_id, which changes between auto/manual filament mapping modes.
     out_physical_extruder_map.clear();
-    const auto* opt_preset_phys_map = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>("physical_extruder_map");
+    const auto* opt_preset_phys_map = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_physical_extruder_map);
     if (opt_preset_phys_map && !opt_preset_phys_map->values.empty()) {
         out_physical_extruder_map = opt_preset_phys_map->values;
         VORTEK_LOG(warn, "compute_vortek_derived_maps: using preset physical_extruder_map=["
@@ -857,10 +873,10 @@ void PrintHooks::silent_update_derived_maps(
         return;
 
     // Apply ONLY to full and ori configs (do NOT touch print.m_config to avoid invalidation loops!)
-    if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>("filament_map_2", true)) {
+    if (auto* opt = print.m_ori_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_map_2, true)) {
         opt->values = computed_map_2;
     }
-    if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>("filament_map_2", true)) {
+    if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_map_2, true)) {
         opt->values = computed_map_2;
     }
 
@@ -923,8 +939,8 @@ void PresetBundleHooks::load_nozzle_stats_from_config(
     }
 
     std::vector<std::string> extruder_nozzle_stats_str;
-    if (config.has_printer_setting(initial_printer_profile_name, "extruder_nozzle_stats")) {
-        boost::algorithm::split(extruder_nozzle_stats_str, config.get_printer_setting(initial_printer_profile_name, "extruder_nozzle_stats"), boost::algorithm::is_any_of(","));
+    if (config.has_printer_setting(initial_printer_profile_name, Vortek::Keys::k_extruder_nozzle_stats)) {
+        boost::algorithm::split(extruder_nozzle_stats_str, config.get_printer_setting(initial_printer_profile_name, Vortek::Keys::k_extruder_nozzle_stats), boost::algorithm::is_any_of(","));
     }
     preset_bundle->extruder_nozzle_stat.set_raw_stat(Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(extruder_nozzle_stats_str));
 }
@@ -942,7 +958,7 @@ void PresetBundleHooks::save_nozzle_stats_to_config(
         Slic3r::save_extruder_nozzle_stats_to_string(preset_bundle->extruder_nozzle_stat.get_raw_stat()), 
         ","
     );
-    config.set_printer_setting(printer_name, "extruder_nozzle_stats", extruder_nozzle_stats_str);
+    config.set_printer_setting(printer_name, Vortek::Keys::k_extruder_nozzle_stats, extruder_nozzle_stats_str);
 }
 
 void PresetBundleHooks::load_nozzle_stats_from_dynamic_config(
@@ -953,9 +969,9 @@ void PresetBundleHooks::load_nozzle_stats_from_dynamic_config(
         return;
     }
 
-    if (config.has("extruder_nozzle_stats")) {
-        std::vector<std::string> extruder_nozzle_stats = std::move(config.option<Slic3r::ConfigOptionStrings>("extruder_nozzle_stats", true)->values);
-        config.erase("extruder_nozzle_stats");
+    if (config.has(Vortek::Keys::k_extruder_nozzle_stats)) {
+        std::vector<std::string> extruder_nozzle_stats = std::move(config.option<Slic3r::ConfigOptionStrings>(Vortek::Keys::k_extruder_nozzle_stats, true)->values);
+        config.erase(Vortek::Keys::k_extruder_nozzle_stats);
         preset_bundle->extruder_nozzle_stat.set_raw_stat(Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(extruder_nozzle_stats));
     }
 }
@@ -993,15 +1009,24 @@ bool PrintHooks::apply_h2c_variant_overrides(
 
     // Sync resolved maps directly to new_full_config to prevent double slice
     auto nozzle_map = group_result->get_nozzle_map(-1);
-    auto volume_map = group_result->get_volume_map(-1);
-    new_full_config.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts(nozzle_map));
-    new_full_config.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
+    new_full_config.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
+
+    // [Vortek] In Manual mode, DO NOT overwrite filament_volume_map from group_result.
+    // group_result was built from the PREVIOUS slice and contains stale volume_map.
+    // The user's new volume_map is already in new_full_config (from project_config → full_fff_config).
+    // Overwriting it here causes oscillation: user value vs stale group_result value.
+    // Reference to BBS: Manual mode volume_map is user-authoritative, not engine-computed.
+    bool is_manual = (map_mode == static_cast<int>(Slic3r::fmmManual));
+    if (!is_manual) {
+        auto volume_map = group_result->get_volume_map(-1);
+        new_full_config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
+    }
 
     const auto& full_cfg = print.full_print_config();
-    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_map_2"))
-        new_full_config.set_key_value("filament_map_2", opt->clone());
-    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("physical_extruder_map"))
-        new_full_config.set_key_value("physical_extruder_map", opt->clone());
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_map_2))
+        new_full_config.set_key_value(Vortek::Keys::k_filament_map_2, opt->clone());
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_physical_extruder_map))
+        new_full_config.set_key_value(Vortek::Keys::k_physical_extruder_map, opt->clone());
 
     std::unordered_map<int, std::vector<Slic3r::ExtruderNozleInfo>> filament_extruder_map;
     auto filament_count = new_full_config.option<Slic3r::ConfigOptionStrings>("filament_type")->values.size();
@@ -1022,11 +1047,11 @@ bool PrintHooks::apply_h2c_variant_overrides(
     int extruder_count = new_full_config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter")->values.size();
     int extruder_volume_type_count = 1;
     std::set<std::string> filament_keys = Slic3r::filament_options_with_variant;
-    filament_keys.insert("filament_self_index");
+    filament_keys.insert(Vortek::Keys::k_filament_self_index);
 
     update_filament_config_values_for_multiple_extruders(
         new_full_config, filament_extruder_map, extruder_count, extruder_volume_type_count,
-        filament_keys, "filament_self_index", "filament_extruder_variant"
+        filament_keys, Vortek::Keys::k_filament_self_index, Vortek::Keys::k_filament_extruder_variant
     );
 
     VORTEK_LOG(warn, "apply_h2c_variant_overrides: successfully applied H2C resolved variants to new_full_config");
@@ -1261,7 +1286,7 @@ void PrintHooks::apply_filament_extruder_overrides_h2c(
     bool apply_extruder,
     const std::vector<int>& filament_volume_maps)
 {
-    if (auto* opt = out.option<Slic3r::ConfigOptionInts>("filament_volume_map", true)) {
+    if (auto* opt = out.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map, true)) {
         opt->values = filament_volume_maps;
     }
 
@@ -1281,7 +1306,7 @@ void PrintHooks::apply_filament_extruder_overrides_h2c(
                 out,
                 Slic3r::filament_options_with_variant,
                 "",
-                "filament_extruder_variant",
+                Vortek::Keys::k_filament_extruder_variant,
                 1,
                 filament_maps[i]
             );
@@ -1312,7 +1337,7 @@ void PrintHooks::apply_single_filament_extruder_override_h2c(
             out,
             Slic3r::filament_options_with_variant,
             "",
-            "filament_extruder_variant",
+            Vortek::Keys::k_filament_extruder_variant,
             1,
             extruder_id
         );

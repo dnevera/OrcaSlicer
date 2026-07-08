@@ -3869,6 +3869,15 @@ DynamicPrintConfig PresetBundle::full_config(bool apply_extruder, std::optional<
         this->full_sla_config();
 }
 
+// [Vortek] Overload with plate-level volume_maps (BBS pattern).
+// Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:3203
+DynamicPrintConfig PresetBundle::full_config(bool apply_extruder, std::optional<std::vector<int>>filament_maps, std::optional<std::vector<int>> filament_volume_maps) const
+{
+    return (this->printers.get_edited_preset().printer_technology() == ptFFF) ?
+        this->full_fff_config(apply_extruder, filament_maps, filament_volume_maps) :
+        this->full_sla_config();
+}
+
 DynamicPrintConfig PresetBundle::full_config_secure(std::optional<std::vector<int>>filament_maps) const
 {
     DynamicPrintConfig config = this->full_fff_config(false, filament_maps);
@@ -4193,6 +4202,55 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
     out.option<ConfigOptionStrings>("extruder_nozzle_stats", true)->values = save_extruder_nozzle_stats_to_string(this->extruder_nozzle_stat.get_raw_stat());
 
 	out.option<ConfigOptionEnumGeneric>("printer_technology", true)->value = ptFFF;
+    return out;
+}
+
+// [Vortek] Overload with plate-level volume_maps (BBS pattern).
+// Calls base full_fff_config, then re-applies Vortek variant overrides with correct volume_maps.
+// Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:3228
+DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optional<std::vector<int>> filament_maps, std::optional<std::vector<int>> filament_volume_maps) const
+{
+    // 1. Get base config from the original full_fff_config.
+    // H2C: when plate-level volume_maps are provided, skip variant expansion in the base call —
+    // the base would use project_config volume_map (potentially stale). We re-apply expansion
+    // in step 2 below with the correct plate-level volume_map.
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:3228 — BBS has a single function
+    // with integrated volume_map; our 2-step pattern requires this guard to avoid double expansion.
+    const bool skip_base_expansion = filament_volume_maps.has_value();
+    DynamicPrintConfig out = this->full_fff_config(skip_base_expansion ? false : apply_extruder, filament_maps);
+
+    // 2. If plate-level volume_maps provided and this is H2C, override and re-apply Vortek hooks.
+    if (filament_volume_maps.has_value() && Vortek::is_h2c_printer(out)) {
+        const auto& vol_maps = *filament_volume_maps;
+        out.option<ConfigOptionInts>("filament_volume_map", true)->values = vol_maps;
+
+        // Re-apply Vortek variant overrides with correct volume_maps.
+        size_t num_filaments = this->filament_presets.size();
+        std::vector<int> filament_maps_resolved = out.option<ConfigOptionInts>("filament_map")->values;
+
+        if (num_filaments <= 1) {
+            DynamicPrintConfig filament_config = this->filaments.get_edited_preset().config;
+            if (apply_extruder) {
+                int filament_nvt = vol_maps.empty() ? (int)nvtStandard : vol_maps[0];
+                Vortek::PrintHooks::apply_single_filament_extruder_override_h2c(out, filament_config, filament_maps_resolved[0], apply_extruder, filament_nvt);
+            }
+        } else {
+            // Multi-filament: rebuild temp configs and re-apply
+            std::vector<DynamicPrintConfig> filament_temp_configs(num_filaments);
+            for (size_t i = 0; i < num_filaments; ++i) {
+                const Preset* preset = this->filaments.find_preset(this->filament_presets[i], true);
+                if (preset)
+                    filament_temp_configs[i] = preset->config;
+                else
+                    filament_temp_configs[i] = this->filaments.default_preset().config;
+            }
+            if (apply_extruder) {
+                Vortek::PrintHooks::apply_filament_extruder_overrides_h2c(out, filament_temp_configs, filament_maps_resolved, apply_extruder, vol_maps);
+                Vortek::PrintHooks::expand_print_extruder_variants_h2c(out);
+            }
+        }
+    }
+
     return out;
 }
 

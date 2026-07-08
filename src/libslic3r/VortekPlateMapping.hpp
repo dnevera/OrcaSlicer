@@ -121,23 +121,23 @@ public:
 
 
     /**
-     * @brief Filters variant-transformed keys from full_config_diff to prevent false re-slicing.
-     *
-     * Keys in filament_options_with_variant and Vortek computed maps are recomputed mid-slice
-     * by update_to_config_by_nozzle_group_result. Their values in m_full_print_config diverge
-     * from new_full_config (built by full_fff_config's simpler per-filament logic).
-     * This is expected — not a real config change.
-     */
-    static void filter_full_config_diff(Slic3r::t_config_option_keys& full_config_diff, const Slic3r::PrintConfig& config);
-
-    /**
-     * @brief Filters Vortek computed map keys and handles vector size differences.
+     * @brief Filters Vortek computed map keys from print_diff and handles vector size differences.
+     * Does NOT filter full_config_diff (BBS never does — L1394/1402/1410 commented out).
      */
     static void filter_reslice_diffs(
         const Slic3r::Print& print,
         const Slic3r::ConfigBase& new_full_config,
         Slic3r::t_config_option_keys& print_diff,
         Slic3r::t_config_option_keys& full_config_diff);
+
+    /**
+     * @brief Syncs computed keys that were suppressed from print_diff directly into m_config.
+     * Reproduces BBS L1398/1406/1414: m_config.filament_volume_map = *new_opt.
+     * Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1386-1415
+     */
+    static void sync_suppressed_to_config(
+        Slic3r::PrintConfig& config,
+        const Slic3r::DynamicPrintConfig& new_full_config);
 
     /**
      * @brief Logs config diff keys and values for debugging.
@@ -148,26 +148,22 @@ public:
         const Slic3r::ConfigBase& old_cfg,
         const Slic3r::ConfigBase& new_cfg);
 
-    /**
-     * @brief Filters Vortek computed map keys from print_diff_set and syncs their values
-     *        in full_print_config to prevent sync_after_slicing re-slice loop.
-     */
-    static void filter_print_diff_set(
-        std::unordered_set<std::string>& print_diff_set,
-        const Slic3r::PrintConfig& config,
-        Slic3r::DynamicPrintConfig& full_print_config,
-        const Slic3r::DynamicPrintConfig& new_full_config);
 
     /**
-     * @brief Applies filament overrides to machine configuration retract options.
+     * @brief Overrides upstream filament variant expansion with BBS-style nozzle_group_result mapping.
+     *
+     * On second Print::apply() (after slicing computed nozzle groups), replaces upstream
+     * update_values_to_printer_extruders_for_multiple_filaments expansion with
+     * update_filament_config_values_for_multiple_extruders using the dynamic nozzle map.
+     * No-op for non-H2C printers and on first apply (no group result yet).
+     *
+     * Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
      */
-    static void apply_filament_retract_overrides(
-        Slic3r::DynamicPrintConfig& new_full_config,
-        const std::vector<int>& filament_maps);
-
-    static void restore_filament_variant_overrides_h2c(
+    static void override_filament_variant_expansion(
+        Slic3r::Print& print,
         Slic3r::DynamicPrintConfig& new_full_config,
         const Slic3r::DynamicPrintConfig& ori_full_config);
+
 
     /**
      * @brief Checks if two printer models are compatible (with fallback mapping like O1C <-> O1C2).
