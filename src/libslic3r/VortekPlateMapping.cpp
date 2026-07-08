@@ -313,22 +313,22 @@ void PlateMapping::filter_print_diff_set(
     // Only for Vortek H2C — P2S/H2D and standard printers must NOT be affected.
     if (!is_h2c_printer(config)) return;
 
-    // Data-driven: suppress all keys with filter_print_diff=true from registry
+    // Data-driven: suppress all computed keys from print_diff.
+    // Computed keys are injected by Vortek hooks during slice (not from GUI),
+    // so any diff for them is expected and should not trigger reslice.
     for (const auto& kd : Vortek::Keys::registry()) {
-        if (kd.filter_print_diff && print_diff_set.erase(kd.name) > 0) {
-            // For computed keys: sync value in full_print_config to match new_full_config,
+        if (kd.computed && print_diff_set.erase(kd.name) > 0) {
+            // Sync value in full_print_config to match new_full_config,
             // so next Print::apply won't see this key in diff again
-            if (kd.computed && new_full_config.has(kd.name)) {
+            if (new_full_config.has(kd.name)) {
                 auto* new_opt = new_full_config.option(kd.name);
                 if (new_opt) {
                     full_print_config.set_key_value(kd.name, new_opt->clone());
                 }
             }
-            VORTEK_LOG(warn, "filter_print_diff_set: suppressed key '" << kd.name << "'");
+            VORTEK_LOG(warn, "filter_print_diff_set: suppressed computed key '" << kd.name << "'");
         }
     }
-    // Note: suppress_retract_override_diffs removed — root cause fixed by
-    // get_override_indices() in PrintApply.cpp (filament_map_2 for H2C).
 }
 
 void PlateMapping::filter_reslice_diffs(
@@ -343,9 +343,10 @@ void PlateMapping::filter_reslice_diffs(
     auto erase_key = [](Slic3r::t_config_option_keys& keys, const std::string& key) {
         keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
     };
-    // Data-driven: suppress all keys with filter_reslice_diff=true from registry
+    // Data-driven: suppress all computed keys from diffs.
+    // Computed keys are injected by Vortek hooks, not from GUI.
     for (const auto& kd : Vortek::Keys::registry()) {
-        if (kd.filter_reslice_diff) {
+        if (kd.computed) {
             erase_key(print_diff, kd.name);
             erase_key(full_config_diff, kd.name);
         }

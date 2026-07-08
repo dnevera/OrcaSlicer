@@ -149,8 +149,20 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_co
     std::map<int, int> input_nozzle_id_to_output;
     std::vector<int> output_nozzle_map(filament_nozzle_map.size(), 0);
 
+    // Log nozzle_list for diagnostics
+    for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+        VORTEK_LOG(warn, "  nozzle_list[" << ni << "] ext=" << nozzle_list[ni].extruder_id
+            << " vol_type=" << (int)nozzle_list[ni].volume_type
+            << " group_id=" << nozzle_list[ni].group_id
+            << " dia=" << nozzle_list[ni].diameter);
+    }
+
     for (auto filament_idx : used_filaments) {
         if (filament_idx >= filament_volume_map.size() || filament_idx >= filament_map.size() || filament_idx >= filament_nozzle_map.size()) {
+            VORTEK_LOG(warn, "  FAIL: filament_idx=" << filament_idx
+                << " out of bounds: vol_map.size=" << filament_volume_map.size()
+                << " fil_map.size=" << filament_map.size()
+                << " nozzle_map.size=" << filament_nozzle_map.size());
             return std::nullopt;
         }
         NozzleVolumeType req_type = NozzleVolumeType(filament_volume_map[filament_idx]);
@@ -159,6 +171,9 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_co
 
         if (input_nozzle_id_to_output.find(input_nozzle_idx) != input_nozzle_id_to_output.end()) {
             output_nozzle_map[filament_idx] = input_nozzle_id_to_output[input_nozzle_idx];
+            VORTEK_LOG(warn, "  filament[" << filament_idx << "] req_ext=" << req_extruder
+                << " req_type=" << (int)req_type << " input_nz=" << input_nozzle_idx
+                << " -> CACHED output_nz=" << output_nozzle_map[filament_idx]);
             continue;
         }
 
@@ -177,7 +192,14 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_co
             break;
         }
 
+        VORTEK_LOG(warn, "  filament[" << filament_idx << "] req_ext=" << req_extruder
+            << " req_type=" << (int)req_type << " input_nz=" << input_nozzle_idx
+            << " -> output_nz=" << output_nozzle_idx);
+
         if (output_nozzle_idx == -1) {
+            VORTEK_LOG(warn, "  FAIL: no matching nozzle for filament[" << filament_idx
+                << "] req_ext=" << req_extruder << " req_type=" << (int)req_type
+                << " (available nozzles: " << nozzle_list.size() << ")");
             return std::nullopt;
         }
         output_nozzle_map[filament_idx] = output_nozzle_idx;

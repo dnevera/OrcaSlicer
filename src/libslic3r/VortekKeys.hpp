@@ -52,25 +52,24 @@ enum class Group {
 // │               │               expanded values for diff comparison.       │
 // │               ▼                                                          │
 // │    ┌──────────────────────┐                                              │
-// │    │  print_config_diffs  │ ← filter_print_diff: removes keys from      │
-// │    │  (m_config vs        │   print_diff result. Keys managed by         │
-// │    │   recomputed via     │   apply_retract_overrides will always        │
-// │    │   apply_override)    │   show false diffs here (double-override).   │
+// │    │  print_config_diffs  │ ← computed keys: suppressed via              │
+// │    │  (m_config vs        │   filter_print_diff_set (uses computed flag) │
+// │    │   recomputed via     │                                              │
+// │    │   apply_override)    │                                              │
 // │    └──────────┬───────────┘                                              │
 // │               │                                                          │
 // │               ▼                                                          │
 // │    ┌──────────────────────┐                                              │
-// │    │ full_config_diffs    │ ← filter_reslice_diff: removes keys from    │
-// │    │ (m_full vs new_full) │   full_config_diff result. Structural        │
-// │    │                      │   diffs (size 6 vs 4) are expected from      │
-// │    │                      │   variant expansion.                         │
+// │    │ full_config_diffs    │ ← computed keys: suppressed via              │
+// │    │ (m_full vs new_full) │   filter_reslice_diffs (uses computed flag)  │
 // │    └──────────┬───────────┘                                              │
 // │               │                                                          │
 // │               ▼                                                          │
 // │    ┌──────────────────────┐                                              │
-// │    │ Reslice / No reslice │ ← computed: keys injected by Vortek hooks   │
-// │    └──────────────────────┘   during slice (not from GUI) → always       │
-// │                               suppress from both diffs.                  │
+// │    │ Reslice / No reslice │   Normal keys participate in diff honestly.  │
+// │    └──────────────────────┘   Variant-expanded keys arrive pre-expanded  │
+// │                               from GUI full_fff_config() → no false      │
+// │                               diffs (restore_variants disabled).         │
 // │                                                                          │
 // │  Post-slice pipeline (VortekPrintHooks.cpp):                             │
 // │                                                                          │
@@ -96,9 +95,10 @@ enum class Group {
 //
 //  computed:
 //    true = Key is INJECTED by Vortek hooks during slice (e.g. physical_extruder_map,
-//           filament_self_index). Not set by GUI. Always suppress from diffs
-//           (both print_diff and reslice_diff) to prevent invalidation.
-//    Consumers: filter_by_attr(&KeyDef::computed) in PlateMapping filters.
+//           filament_self_index). Not set by GUI. Suppressed from both
+//           print_diff and full_config_diff to prevent false invalidation.
+//    Consumers: PlateMapping::filter_print_diff_set(),
+//               PlateMapping::filter_reslice_diffs()
 //
 //  sync_align:
 //    true = Copy this key in align_incoming_config (m_full → new_full).
@@ -114,20 +114,6 @@ enum class Group {
 //    Also used as default for sync_keys_between() (VortekGCode sync).
 //    Consumers: ConfigSync::sync_baseline(),
 //               ConfigSync::sync_keys_between(src, dst) [default overload]
-//
-//  filter_print_diff:
-//    true = Remove this key from print_diff result in filter_print_diff_set().
-//           Retract keys: always show false diffs because m_config baseline
-//           (copied pre-override from first apply) differs from apply_override
-//           recomputed values. These keys are managed by our pipeline.
-//    Consumers: PlateMapping::filter_print_diff_set() in PrintApply.cpp hook.
-//
-//  filter_reslice_diff:
-//    true = Remove this key from full_config_diff in filter_reslice_diffs().
-//           Variant-expanded keys will always have size/value diffs between
-//           m_full_print_config (size=N_variants) and new_full_config (size=N_extruders).
-//           These are expected structural differences, not bugs.
-//    Consumers: PlateMapping::filter_reslice_diffs() in PrintApply.cpp hook.
 //
 //  variant_expanded:
 //    true = Key is expanded by BBS filament_options_with_variant mechanism.
@@ -152,26 +138,22 @@ enum class Group {
 //
 //     {k_your_key_name, Origin::Vortek/BBS, Group::XXX,
 //         computed, sync_align, sync_baseline,
-//         filter_print_diff, filter_reslice_diff,
 //         variant_expanded, needs_variant_override},
 //
 //  3. Decision guide for attributes:
 //
 //     Q: Is this key injected during slice (not from GUI)?
-//        → computed=true, sync_align=true, sync_baseline=true,
-//          filter_print_diff=true, filter_reslice_diff=true
+//        → computed=true, sync_align=true, sync_baseline=true
 //
 //     Q: Is this a BBS retract key that uses apply_override?
 //        → computed=false, sync_align=FALSE (avoid double-override),
-//          sync_baseline=true, filter_print_diff=true,
-//          filter_reslice_diff=true, needs_variant_override=true
+//          sync_baseline=true, needs_variant_override=true
 //
 //     Q: Is this a Vortek-only key (nc params, hardware, capabilities)?
-//        → All false (no sync/filter needed, Vortek manages internally)
+//        → All false (no sync needed, Vortek manages internally)
 //
 //     Q: Is this a BBS thermal key expanded by variants?
-//        → sync_align=true, sync_baseline=true,
-//          filter_reslice_diff=true, variant_expanded=true
+//        → sync_align=true, sync_baseline=true, variant_expanded=true
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -184,10 +166,6 @@ struct KeyDef {
     bool computed;              // Injected by Vortek hooks during slice, not from GUI
     bool sync_align;            // Copy in align_incoming_config (m_full → new_full)
     bool sync_baseline;         // Copy in sync_baseline (m_full → m_config)
-
-    // ─── Filter attributes (see flow diagram above) ───
-    bool filter_print_diff;     // Suppress from print_diff (retract double-override)
-    bool filter_reslice_diff;   // Suppress from full_config_diff (size/value structural diff)
 
     // ─── Expansion attributes ───
     bool variant_expanded;      // Expanded by filament_options_with_variant
@@ -202,11 +180,9 @@ const std::vector<KeyDef>& registry();
 // ─── Pre-built query sets ───
 
 const std::unordered_set<std::string>& computed_set();
-const std::unordered_set<std::string>& filter_print_diff_set();
-const std::unordered_set<std::string>& filter_reslice_diff_set();
 const std::unordered_set<std::string>& sync_align_set();
 const std::unordered_set<std::string>& sync_baseline_set();
-const std::unordered_set<std::string>& managed_set();          // union of all sync/filter keys
+const std::unordered_set<std::string>& managed_set();          // union of all sync keys
 const std::unordered_set<std::string>& variant_override_set(); // needs_variant_override=true
 
 // ─── Query functions ───
