@@ -239,6 +239,7 @@ void BackgroundSlicingProcess::process_fff()
                 m_current_plate->set_filament_nozzle_maps(::Vortek::PrintHooks::get_filament_nozzle_maps(*m_fff_print));
             }
         }
+
 		wxCommandEvent evt(m_event_slicing_completed_id);
 		// Post the Slicing Finished message for the G-code viewer to update.
 		// Passing the timestamp

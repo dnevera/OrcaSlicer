@@ -29,10 +29,19 @@ const std::vector<KeyDef>& registry() {
         //           [4] variant_expanded  [5] needs_variant_override
         {k_filament_map,              O::BBS,    G::Mapping,
             true, true, true, false, false},
+        // filament_volume_map: computed=true, sync_align=FALSE.
+        // In Manual mode: user-set — must not be overwritten by align_incoming_config.
+        // In Auto mode: computed by ensure_nozzle_group_result — propagates via
+        //   filter_print_diff_set (L323: full_print_config sync) + BackgroundSlicingProcess save.
+        // BBS has no align_incoming_config — these values flow through plate→project_config.
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1400-1421
         {k_filament_volume_map,       O::Vortek, G::Mapping,
-            true, true, true, false, false},
+            true, false, true, false, false},
+        // filament_nozzle_map: computed=true, sync_align=FALSE.
+        // "not used in gui studio" (BBS PrintApply L1421) — erase from diff in Manual,
+        // propagate via filter_print_diff_set in Auto. No align needed.
         {k_filament_nozzle_map,       O::Vortek, G::Mapping,
-            true, true, true, false, false},
+            true, false, true, false, false},
         {k_filament_map_2,            O::Vortek, G::Mapping,
             true, true, true, false, false},
         {k_filament_extruder_variant, O::BBS,    G::Mapping,
@@ -183,18 +192,6 @@ const std::unordered_set<std::string>& sync_baseline_set() {
 
 const std::unordered_set<std::string>& variant_override_set() {
     static auto s = build_set(&KeyDef::needs_variant_override);
-    return s;
-}
-
-const std::unordered_set<std::string>& managed_set() {
-    static std::unordered_set<std::string> s = []() {
-        std::unordered_set<std::string> result;
-        for (const auto& k : registry()) {
-            if (k.computed || k.sync_align || k.sync_baseline)
-                result.insert(k.name);
-        }
-        return result;
-    }();
     return s;
 }
 

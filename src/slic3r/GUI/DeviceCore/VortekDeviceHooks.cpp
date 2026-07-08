@@ -629,19 +629,17 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                                          ? static_cast<int>(Slic3r::nvtHighFlow)
                                          : static_cast<int>(Slic3r::nvtStandard);
 
-                        if (is_manual_mode && f_volume_maps[fidx] != 0) {
-                            // User explicitly assigned this filament (HF or Std) in FilamentMapDialog.
-                            // plate_config.filament_volume_map is the single source of truth in Manual mode.
-                            // Only invalidate if the requested HF nozzle no longer physically exists.
-                            // Reference: VortekDeviceHooks.cpp update_filament_volume_map
+                        if (is_manual_mode) {
+                            // Manual mode: ALL plate volume_map values are user-authoritative.
+                            // 0 (nvtStandard) is a VALID user choice, NOT "unset".
+                            // Only invalidate HF choices when HF nozzle physically removed.
+                            // Reference to BBS: plate_config is single source of truth in Manual.
                             if (f_volume_maps[fidx] == static_cast<int>(Slic3r::nvtHighFlow) && hf_count == 0) {
-                                // HF nozzle physically removed from rack — force reset to Standard
                                 vol = static_cast<int>(Slic3r::nvtStandard);
                                 VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
                                            << " filament=" << fidx
                                            << " user HF choice INVALIDATED (no HF nozzle in rack)");
                             } else {
-                                // User choice is physically valid — preserve it unchanged
                                 vol = f_volume_maps[fidx];
                                 VORTEK_LOG(warn, "sync_machine_nozzle_inventory_to_preset: plate=" << idx
                                            << " filament=" << fidx
@@ -1570,7 +1568,17 @@ void save_filament_volume_maps_hook(
     Slic3r::FilamentMapMode mode,
     const std::vector<int>& volume_map)
 {
-    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) return;
+    if (!Vortek::is_h2c_printer(Slic3r::GUI::wxGetApp().preset_bundle)) {
+        VORTEK_LOG(warn, "save_filament_volume_maps_hook: NOT H2C printer, skipping");
+        return;
+    }
+
+    {
+        std::string vm_str;
+        for (int v : volume_map) vm_str += std::to_string(v) + ",";
+        VORTEK_LOG(warn, "save_filament_volume_maps_hook: mode=" << (int)mode
+            << " volume_map=[" << vm_str << "] sync_plate=" << sync_plate << " is_slice_all=" << is_slice_all);
+    }
 
     // project_config write: only in Manual mode (user explicitly set per-filament HF/Std).
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
@@ -1578,6 +1586,7 @@ void save_filament_volume_maps_hook(
         auto* opt_vm = Slic3r::GUI::wxGetApp().preset_bundle->project_config.option<Slic3r::ConfigOptionInts>("filament_volume_map", true);
         if (opt_vm) {
             opt_vm->values = volume_map;
+            VORTEK_LOG(warn, "save_filament_volume_maps_hook: WROTE to project_config.filament_volume_map");
         }
     }
 

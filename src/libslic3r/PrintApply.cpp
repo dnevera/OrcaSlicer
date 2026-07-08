@@ -1183,9 +1183,6 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
         // No-op for non-H2C printers and on first apply (no group result yet).
         // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
         Vortek::PlateMapping::override_filament_variant_expansion(*this, new_full_config, m_ori_full_print_config);
-
-        // Vortek: restore correct variant filament overrides for H2C print configuration
-        Vortek::PlateMapping::restore_filament_variant_overrides_h2c(*this, new_full_config);
     }
     // else {
     //     int extruder_count;
@@ -1215,8 +1212,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     // [Vortek] Filter out derived computed keys that should not trigger re-slice
     Vortek::PlateMapping::filter_reslice_diffs(*this, new_full_config, print_diff, full_config_diff);
-    // [Vortek] Filter variant-transformed keys that diverge mid-slice (H2C multi-nozzle only)
-    Vortek::PlateMapping::filter_full_config_diff(full_config_diff, m_config);
+    // [Vortek] Sync computed keys (suppressed from print_diff) directly into m_config
+    Vortek::PlateMapping::sync_suppressed_to_config(m_config, new_full_config);
 
     // [Vortek DIAG] Log diff keys and values for re-slice debugging
     Vortek::PlateMapping::diag_log_config_diffs("print_diff", print_diff, m_config, new_full_config);
@@ -1228,8 +1225,6 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 
     //BBS: process the filament_map related logic
     std::unordered_set<std::string> print_diff_set(print_diff.begin(), print_diff.end());
-    // [Vortek] Filter computed map keys from print_diff to prevent sync_after_slicing re-slice loop
-    Vortek::PlateMapping::filter_print_diff_set(print_diff_set, m_config, m_full_print_config, new_full_config);
     if (print_diff_set.find("filament_map_mode") == print_diff_set.end())
     {
         FilamentMapMode map_mode = new_full_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode", true)->value;

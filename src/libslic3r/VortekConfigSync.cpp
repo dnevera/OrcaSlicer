@@ -117,28 +117,9 @@ int ConfigSync::restore_variants(Slic3r::DynamicPrintConfig& new_full_config) {
     return restored;
 }
 
-// ────────────────────── Diff Filtering ──────────────────────
-
-size_t ConfigSync::filter_managed_keys(Slic3r::t_config_option_keys& diff) {
-    if (diff.empty()) return 0;
-    const auto& keys = Keys::managed_set();
-    Slic3r::t_config_option_keys filtered;
-    filtered.reserve(diff.size());
-    for (const auto& k : diff) {
-        if (keys.find(k) == keys.end())
-            filtered.push_back(k);
-    }
-    size_t suppressed = diff.size() - filtered.size();
-    if (suppressed > 0)
-        diff = std::move(filtered);
-    return suppressed;
-}
-
-size_t ConfigSync::filter_computed_keys(std::unordered_set<std::string>& diff_set) {
-    return Keys::filter_by_attr(diff_set, &Keys::KeyDef::computed);
-}
 
 // ────────────────────── Variant Override ──────────────────────
+
 
 std::vector<int> ConfigSync::get_override_indices(const Slic3r::DynamicPrintConfig& config) {
     // H2C: filament_map_2 contains variant indices (0-based).

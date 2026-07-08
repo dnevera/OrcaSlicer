@@ -41,15 +41,23 @@ void PlateMapping::sync_after_slicing(
     // CRITICAL: Sync ALL computed maps to preset_bundle.project_config.
     // full_config() is built from project_config (NOT plate_config), so without this
     // the next Print::apply() gets stale defaults → config drift → double-slicing.
+    //
+    // EXCEPTION: In Manual mode, filament_volume_map is USER-SET (via dialog drag).
+    // ToolOrdering computes volume_map based on filament properties, NOT user intent.
+    // Overwriting user-set with computed causes oscillation → infinite reslice.
+    bool is_manual = (filament_map_mode == Slic3r::fmmManual || filament_map_mode == Slic3r::fmmNozzleManual);
+
     auto& proj = preset_bundle.project_config;
     proj.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
-    proj.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
+    if (!is_manual) {
+        proj.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
+    }
     if (!map_2.empty())
         proj.set_key_value(Vortek::Keys::k_filament_map_2, new Slic3r::ConfigOptionInts(map_2));
     if (!phys_map.empty())
         proj.set_key_value(Vortek::Keys::k_physical_extruder_map, new Slic3r::ConfigOptionInts(phys_map));
 
-    if (filament_map_mode != Slic3r::fmmManual && filament_map_mode != Slic3r::fmmNozzleManual) {
+    if (!is_manual) {
         VORTEK_LOG(warn, "sync_after_slicing: auto mode — synced project_config only (plate_config skipped)");
         return;
     }
@@ -62,11 +70,9 @@ void PlateMapping::sync_after_slicing(
         plate_config.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
         changed = true;
     }
-    auto* opt_volume = plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
-    if (!opt_volume || opt_volume->values != volume_map) {
-        plate_config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
-        changed = true;
-    }
+    // NOTE: filament_volume_map is NOT synced to plate_config in Manual mode.
+    // It is user-set (via dialog drag) and already in plate_config.
+    // Overwriting with ToolOrdering-computed value causes oscillation.
 
     if (changed) {
         VORTEK_LOG(warn, "sync_after_slicing: nozzle maps changed, updated plate + project config");
@@ -290,46 +296,7 @@ bool PlateMapping::are_models_compatible(const std::string& model1, const std::s
     return false;
 }
 
-void PlateMapping::filter_full_config_diff(Slic3r::t_config_option_keys& full_config_diff, const Slic3r::PrintConfig& config)
-{
-    if (full_config_diff.empty()) return;
-    if (!is_h2c_printer(config)) return;
 
-    size_t suppressed = Vortek::ConfigSync::filter_managed_keys(full_config_diff);
-    if (suppressed > 0) {
-        VORTEK_LOG(warn, "filter_full_config_diff: suppressed " << suppressed
-                         << " variant-transformed keys from full_config_diff");
-    }
-}
-
-void PlateMapping::filter_print_diff_set(
-    std::unordered_set<std::string>& print_diff_set,
-    const Slic3r::PrintConfig& config,
-    Slic3r::DynamicPrintConfig& full_print_config,
-    const Slic3r::DynamicPrintConfig& new_full_config)
-{
-    if (print_diff_set.empty()) return;
-
-    // Only for Vortek H2C — P2S/H2D and standard printers must NOT be affected.
-    if (!is_h2c_printer(config)) return;
-
-    // Data-driven: suppress all computed keys from print_diff.
-    // Computed keys are injected by Vortek hooks during slice (not from GUI),
-    // so any diff for them is expected and should not trigger reslice.
-    for (const auto& kd : Vortek::Keys::registry()) {
-        if (kd.computed && print_diff_set.erase(kd.name) > 0) {
-            // Sync value in full_print_config to match new_full_config,
-            // so next Print::apply won't see this key in diff again
-            if (new_full_config.has(kd.name)) {
-                auto* new_opt = new_full_config.option(kd.name);
-                if (new_opt) {
-                    full_print_config.set_key_value(kd.name, new_opt->clone());
-                }
-            }
-            VORTEK_LOG(warn, "filter_print_diff_set: suppressed computed key '" << kd.name << "'");
-        }
-    }
-}
 
 void PlateMapping::filter_reslice_diffs(
     const Slic3r::Print& print,
@@ -343,14 +310,49 @@ void PlateMapping::filter_reslice_diffs(
     auto erase_key = [](Slic3r::t_config_option_keys& keys, const std::string& key) {
         keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
     };
-    // Data-driven: suppress all computed keys from diffs.
-    // Computed keys are injected by Vortek hooks, not from GUI.
-    for (const auto& kd : Vortek::Keys::registry()) {
-        if (kd.computed) {
-            erase_key(print_diff, kd.name);
-            erase_key(full_config_diff, kd.name);
-        }
+    // Determine Manual mode once for the exceptions below.
+    bool is_manual_mode = false;
+    {
+        auto* opt = new_full_config.option<Slic3r::ConfigOptionEnum<Slic3r::FilamentMapMode>>("filament_map_mode");
+        if (opt && opt->value == Slic3r::fmmManual)
+            is_manual_mode = true;
     }
+
+    // Data-driven: suppress computed keys from print_diff only.
+    // BBS NEVER erases mapping keys from full_config_diff (L1394/1402/1410 — commented out).
+    // Keeping full_config_diff !empty ensures L1292 block fires → m_full_print_config = new_full_config.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1386-1469
+    for (const auto& kd : Vortek::Keys::registry()) {
+        if (!kd.computed) continue;
+
+        // Manual mode: filament_volume_map is USER-SET → do NOT suppress.
+        // User's assignment in FilamentMapDialog must trigger reslice.
+        // Plate config is the source of truth (read via get_real_filament_volume_maps → project_config).
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1417-1465
+        if (is_manual_mode && kd.name == Vortek::Keys::k_filament_volume_map) {
+            VORTEK_LOG(warn, "filter_reslice_diffs: Manual mode — volume_map NOT suppressed (user-set, triggers reslice)");
+            continue;
+        }
+
+        // Manual mode: filament_nozzle_map — "not used in gui studio" (BBS L1421).
+        // Auto mode: all computed keys — suppress from print_diff to prevent reslice.
+        // In both cases: do NOT erase from full_config_diff (BBS pattern).
+        erase_key(print_diff, kd.name);
+    }
+
+    // H2C: suppress retract keys + filament_options_with_variant from print_diff.
+    // override_filament_variant_expansion syncs m_full → new_full for full_config_diff,
+    // but print_config_diffs compares m_config vs new_full. m_config may be stale
+    // (not yet updated by apply_only), so these diffs are false positives.
+    // sync_suppressed_to_config keeps m_config consistent after filtering.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1495-1523
+    for (const auto& rk : Slic3r::print_config_def.extruder_retract_keys()) {
+        erase_key(print_diff, rk);
+    }
+    for (const auto& key : Slic3r::filament_options_with_variant) {
+        erase_key(print_diff, key);
+    }
+
 
     // H2C Hybrid: suppress extruder_nozzle_stats diff when only std_count changes.
     // The std count fluctuates 3↔4 as slot-6 "In Use" nozzle appears/disappears across
@@ -468,6 +470,70 @@ void PlateMapping::filter_reslice_diffs(
     log_survivors(full_config_diff, "full_config_diff",  print.full_print_config(), new_full_config);
 }
 
+// Sync computed keys that were suppressed (erased) from print_diff directly into m_config.
+// Without this, m_config.apply_only(new_full_config, print_diff) does NOT update these keys
+// (since they were erased from print_diff), leaving m_config stale → ghost diffs on next apply.
+// Reproduces BBS pattern: BambuStudio/src/libslic3r/PrintApply.cpp L1398/1406/1414
+//   m_config.filament_volume_map = *new_opt;
+//   m_config.filament_nozzle_map = *new_opt;
+// Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1386-1415
+void PlateMapping::sync_suppressed_to_config(
+    Slic3r::PrintConfig& config,
+    const Slic3r::DynamicPrintConfig& new_full_config)
+{
+    if (!is_h2c_printer(config)) return;
+
+    bool is_manual = false;
+    if (auto* opt = new_full_config.option<Slic3r::ConfigOptionEnum<Slic3r::FilamentMapMode>>("filament_map_mode"))
+        is_manual = (opt->value == Slic3r::fmmManual);
+
+    int synced = 0;
+
+    // Sync computed mapping keys (filament_map, filament_volume_map, etc.)
+    // Retract keys and filament_options_with_variant are NOT synced here —
+    // override_filament_variant_expansion already aligned them in new_full_config,
+    // and apply_only(new_full_config, print_diff) handles m_config update.
+    for (const auto& kd : Vortek::Keys::registry()) {
+        if (!kd.computed) continue;
+        // In Manual mode, volume_map is NOT suppressed — m_config updates via apply_only.
+        if (is_manual && kd.name == Vortek::Keys::k_filament_volume_map) continue;
+        // Sync suppressed key: new_full_config → m_config
+        if (auto* new_opt = new_full_config.option<Slic3r::ConfigOptionInts>(kd.name)) {
+            if (auto* cfg_opt = config.option<Slic3r::ConfigOptionInts>(kd.name, true)) {
+                cfg_opt->values = new_opt->values;
+                ++synced;
+            }
+        }
+    }
+
+    // 2. Sync retract keys: suppressed from print_diff by filter_reslice_diffs.
+    //    apply_only won't update m_config for these → must sync from new_full_config.
+    //    Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1523
+    for (const auto& rk : Slic3r::print_config_def.extruder_retract_keys()) {
+        const auto* src = new_full_config.option(rk);
+        if (!src) continue;
+        auto* dst = config.option(rk, true);
+        if (dst && *dst != *src) {
+            dst->set(src);
+            ++synced;
+        }
+    }
+
+    // 3. Sync filament_options_with_variant (suppressed from print_diff)
+    for (const auto& key : Slic3r::filament_options_with_variant) {
+        const auto* src = new_full_config.option(key);
+        if (!src) continue;
+        auto* dst = config.option(key, true);
+        if (dst && *dst != *src) {
+            dst->set(src);
+            ++synced;
+        }
+    }
+
+    VORTEK_LOG(warn, "sync_suppressed_to_config: synced " << synced << " keys to m_config"
+        << (is_manual ? " [Manual: volume_map skipped]" : " [Auto]"));
+}
+
 // [Vortek DIAG] Log config diff keys and their old/new values for re-slice debugging.
 // No-op for non-H2C printers.
 void PlateMapping::diag_log_config_diffs(
@@ -494,30 +560,6 @@ void PlateMapping::diag_log_config_diffs(
     }
 }
 
-void PlateMapping::restore_filament_variant_overrides_h2c(
-    Slic3r::Print& print,
-    Slic3r::DynamicPrintConfig& new_full_config
-)
-{
-    if (!is_h2c_printer(new_full_config)) {
-        return;
-    }
-
-    // If align_incoming_config already ran (nozzle_group_result exists),
-    // skip — align already wrote correct H2C-expanded values.
-    auto group_result = print.get_nozzle_group_result();
-    if (group_result) {
-        return;
-    }
-
-    // First apply: do NOT call restore_variants.
-    // GUI's full_fff_config() already correctly expands filament variant keys
-    // to size = N_filaments × N_nozzle_types (e.g. 6 × 2 = 12).
-    // restore_variants would overwrite these with pre-expansion values from
-    // m_ori_full_print_config (size=6), causing persistent diff → reslice.
-    VORTEK_LOG(warn, "restore_filament_variant_overrides_h2c: first apply, "
-        "keeping GUI variant expansion as-is (no restore_variants)");
-}
 
 // [Vortek] Override upstream filament variant expansion with BBS-style nozzle_group_result mapping.
 // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1338-1362
@@ -530,16 +572,70 @@ void PlateMapping::override_filament_variant_expansion(
         return;
     }
 
-    // No nozzle_group_result on first apply — nothing to override yet
-    auto group_result = print.get_nozzle_group_result();
-    if (!group_result) {
-        VORTEK_LOG(warn, "override_filament_variant_expansion: no nozzle_group_result yet (first apply), skipping");
-        return;
+    // Strategy: copy variant-expanded keys from m_full_print_config → new_full_config.
+    // This makes full_print_config_diffs(m_full_print_config, new_full_config) = 0 for variant keys.
+    //
+    // Why this works:
+    //   - First apply: m_full = base, new_full = base → both base → no diff
+    //   - After slicing: m_full = expanded (by VortekPrintHooks), new_full = base
+    //     → copy expanded → both expanded → no diff
+    //
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1341-1358
+
+    const auto& m_full = print.full_print_config();
+
+    // 1. Sync Vortek registry keys (mapping + thermal) from m_full → new_full.
+    // After slicing, m_full contains stale mapping values that diverge from plate_config.
+    // Sync eliminates diffs for nozzle_map, filament_map, etc.
+    //
+    // EXCEPTION: filament_volume_map in Manual mode arrives correctly via plate_config →
+    // get_real_filament_volume_maps → full_config(false, f_maps, f_volume_maps).
+    // In Auto mode, volume_map is computed by ToolOrdering → sync from m_full is correct.
+    bool is_manual = false;
+    if (auto* opt = new_full_config.option<Slic3r::ConfigOptionEnum<Slic3r::FilamentMapMode>>("filament_map_mode"))
+        is_manual = (opt->value == Slic3r::fmmManual);
+
+    std::vector<int> plate_volume_map;
+    if (is_manual) {
+        if (auto* opt = new_full_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map))
+            plate_volume_map = opt->values;
     }
 
-    // Delegate to orchestrator: m_full_print_config → new_full_config
     Vortek::ConfigSync sync(print);
-    sync.align_incoming_config(new_full_config);
+    int registry_copied = sync.sync_keys_between(m_full, new_full_config, &Keys::KeyDef::sync_baseline);
+
+    // Manual mode: restore plate-level volume_map (user-set, not computed)
+    if (is_manual && !plate_volume_map.empty()) {
+        new_full_config.set_key_value(Vortek::Keys::k_filament_volume_map,
+            new Slic3r::ConfigOptionInts(plate_volume_map));
+    }
+
+    // 2. Sync ALL filament_options_with_variant (BBS base layer: retract, thermal, flow, etc.)
+    int variant_copied = 0;
+    for (const auto& key : Slic3r::filament_options_with_variant) {
+        const auto* src = m_full.option(key);
+        if (!src) continue;
+        auto* dst = new_full_config.option(key, true);
+        if (dst && *dst != *src) {
+            dst->set(src);
+            ++variant_copied;
+        }
+    }
+
+    // 3. Sync printer-level retract keys (retraction_length, z_hop, wipe_distance, etc.)
+    for (const auto& rk : Slic3r::print_config_def.extruder_retract_keys()) {
+        const auto* src = m_full.option(rk);
+        if (!src) continue;
+        auto* dst = new_full_config.option(rk, true);
+        if (dst && *dst != *src) {
+            dst->set(src);
+            ++variant_copied;
+        }
+    }
+
+    VORTEK_LOG(warn, "override_filament_variant_expansion: synced " << registry_copied << " registry + "
+        << variant_copied << " variant keys from m_full_print_config → new_full_config"
+        << (is_manual ? " [Manual: plate volume_map preserved]" : " [Auto]"));
 }
 
 } // namespace Vortek

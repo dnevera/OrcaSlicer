@@ -182,7 +182,6 @@ const std::vector<KeyDef>& registry();
 const std::unordered_set<std::string>& computed_set();
 const std::unordered_set<std::string>& sync_align_set();
 const std::unordered_set<std::string>& sync_baseline_set();
-const std::unordered_set<std::string>& managed_set();          // union of all sync keys
 const std::unordered_set<std::string>& variant_override_set(); // needs_variant_override=true
 
 // ─── Query functions ───

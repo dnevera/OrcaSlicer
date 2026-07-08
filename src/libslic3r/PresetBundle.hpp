@@ -367,6 +367,8 @@ public:
         { return prints.has_defaults_only() && filaments.has_defaults_only() && printers.has_defaults_only(); }
 
     DynamicPrintConfig          full_config(bool apply_extruder = true, std::optional<std::vector<int>>filament_maps = std::nullopt) const;
+    // [Vortek] Overload with plate-level volume_maps. Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.hpp:319
+    DynamicPrintConfig          full_config(bool apply_extruder, std::optional<std::vector<int>>filament_maps, std::optional<std::vector<int>> filament_volume_maps) const;
     // full_config() with the some "useless" config removed.
     DynamicPrintConfig          full_config_secure(std::optional<std::vector<int>>filament_maps = std::nullopt) const;
 
@@ -522,6 +524,8 @@ private:
         const std::string &path, const boost::property_tree::ptree &tree, ForwardCompatibilitySubstitutionRule compatibility_rule);*/
 
     DynamicPrintConfig          full_fff_config(bool apply_extruder, std::optional<std::vector<int>> filament_maps=std::nullopt) const;
+    // [Vortek] Overload with plate-level volume_maps.
+    DynamicPrintConfig          full_fff_config(bool apply_extruder, std::optional<std::vector<int>> filament_maps, std::optional<std::vector<int>> filament_volume_maps) const;
     DynamicPrintConfig          full_sla_config() const;
 
     // Orca: used for validation only

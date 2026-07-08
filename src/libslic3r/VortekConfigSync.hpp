@@ -222,19 +222,15 @@
  *               filament_pre_cooling_temperature_nc
  *
  * ═══════════════════════════════════════════════════════════════════════════
- *  5. DIFF FILTERING (safety net)
+ *  5. DIFF FILTERING (removed — see PlateMapping::filter_reslice_diffs)
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * With clone+set_key_value copy semantics and the align/restore mutual
- * exclusion, the sync pipeline should be fully idempotent — no residual
- * diffs for managed keys. The filter methods below exist as a SAFETY NET
- * for edge cases (e.g., timing during first apply, race conditions):
- *
- *   filter_managed_keys()  — removes all managed keys from a diff vector
- *   filter_computed_keys() — removes computed map keys from a diff set
- *
- * If filters are actively suppressing keys in steady state, it indicates
- * a bug in the sync pipeline that should be investigated.
+ * Previously, filter_managed_keys() and filter_computed_keys() existed here
+ * as safety nets. They were removed because:
+ *   - BBS never filters mapping keys from full_config_diff (L1394/1402/1410 commented out)
+ *   - Filtering full_config_diff prevented m_full_print_config from updating
+ *   - All computed key suppression is now handled by PlateMapping::filter_reslice_diffs
+ *   - m_config sync is handled by PlateMapping::sync_suppressed_to_config
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  6. COPY SEMANTICS
@@ -292,18 +288,6 @@ public:
     /// @return Number of keys restored.
     int restore_variants(Slic3r::DynamicPrintConfig& new_full_config);
 
-    // ────────────────────── Key Queries (delegated to VortekKeys) ──────────────────────
-
-    /// Full set of all managed keys (union of sync/filter keys from registry).
-    static const std::unordered_set<std::string>& managed_keys() { return Keys::managed_set(); }
-
-    // ────────────────────── Diff Filtering (static) ──────────────────────
-
-    /// Filter all managed keys from a diff vector. Returns count suppressed.
-    static size_t filter_managed_keys(Slic3r::t_config_option_keys& diff);
-
-    /// Filter computed map keys from an unordered_set diff. Returns count suppressed.
-    static size_t filter_computed_keys(std::unordered_set<std::string>& diff_set);
 
     // ────────────────────── Variant Override (static) ──────────────────────
 

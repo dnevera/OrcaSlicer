@@ -273,24 +273,31 @@ void PrintHooks::update_filament_maps_to_config(
     // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp   – get_extruder_nozzle_stats
     std::vector<int> final_volume_maps = f_volume_maps;
 
+    // Detect Manual mode: user-set volume_map must be respected, never auto-computed.
+    bool is_manual_mode = false;
+    if (auto* opt = print.m_full_print_config.option<Slic3r::ConfigOptionEnum<Slic3r::FilamentMapMode>>("filament_map_mode"))
+        is_manual_mode = (opt->value == Slic3r::fmmManual);
+
     // When called from the single-arg path (Print.cpp:3241), f_volume_maps is empty.
-    // Before falling back to auto-assignment, check if m_full_print_config already has a
-    // user-set volume_map (e.g. from manual filament→HF assignment in FilamentMapDialog).
+    // In Manual mode: ALWAYS use existing volume_map from m_full_print_config.
     // User assignment is saved to project_config → flows into m_full_print_config via Print::apply().
-    // Respecting it here is what makes manual binding persist through reslice.
-    // Only auto-assign if there is truly no existing map (empty) — all-zeros [0,0,...] from
-    // m_config means "never set", but a mix of 0 and 1 means user intentionally set some HF.
+    // Auto-computing would overwrite user's explicit HF/STD choices → oscillation.
     // Reference to BBS: BambuStudio/src/slic3r/GUI/FilamentMapDialog.cpp – try_pop_up_before_slice
     if (final_volume_maps.empty() && !f_maps.empty()) {
-        // Try to recover from m_full_print_config (user assignment from dialog)
         auto* existing_opt = print.m_full_print_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
         if (existing_opt && !existing_opt->values.empty() && (int)existing_opt->values.size() == (int)f_maps.size()) {
-            bool has_hf = false;
-            for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
-            if (has_hf) {
-                // User has explicitly assigned some filaments to HF — preserve their choice.
+            if (is_manual_mode) {
+                // Manual mode: ALWAYS respect user-set volume_map, even if all-zeros.
                 final_volume_maps = existing_opt->values;
-                VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
+                VORTEK_LOG(warn, "update_filament_maps_to_config: Manual mode — using user-set volume_map (no auto-compute)");
+            } else {
+                // Auto mode: only recover if user has explicitly assigned some HF.
+                bool has_hf = false;
+                for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
+                if (has_hf) {
+                    final_volume_maps = existing_opt->values;
+                    VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
+                }
             }
         }
     }
@@ -1002,9 +1009,18 @@ bool PrintHooks::apply_h2c_variant_overrides(
 
     // Sync resolved maps directly to new_full_config to prevent double slice
     auto nozzle_map = group_result->get_nozzle_map(-1);
-    auto volume_map = group_result->get_volume_map(-1);
     new_full_config.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
-    new_full_config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
+
+    // [Vortek] In Manual mode, DO NOT overwrite filament_volume_map from group_result.
+    // group_result was built from the PREVIOUS slice and contains stale volume_map.
+    // The user's new volume_map is already in new_full_config (from project_config → full_fff_config).
+    // Overwriting it here causes oscillation: user value vs stale group_result value.
+    // Reference to BBS: Manual mode volume_map is user-authoritative, not engine-computed.
+    bool is_manual = (map_mode == static_cast<int>(Slic3r::fmmManual));
+    if (!is_manual) {
+        auto volume_map = group_result->get_volume_map(-1);
+        new_full_config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
+    }
 
     const auto& full_cfg = print.full_print_config();
     if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_map_2))

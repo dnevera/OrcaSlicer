@@ -8561,13 +8561,17 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         PartPlate* cur_plate = background_process.get_current_plate();
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
         if (Vortek::is_h2c_printer(preset_bundle)) {
-            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(cur_plate, preset_bundle->project_config);
-            auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
-            if (opt_vm) {
-                opt_vm->values = f_volume_maps;
+            // [Vortek] Sync plate-level filament_map_mode to project_config for Manual mode guards.
+            {
+                auto plate_mode = cur_plate->get_real_filament_map_mode(preset_bundle->project_config);
+                auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+                if (opt_mode) opt_mode->value = plate_mode;
             }
+            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(cur_plate, preset_bundle->project_config);
+            invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps, f_volume_maps));
+        } else {
+            invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         }
-        invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
     }
     else
@@ -11654,7 +11658,16 @@ bool Plater::priv::check_ams_status_impl(bool is_slice_all)
             NozzleVolumeType left_nozzle_type = NozzleVolumeType(obj->GetExtderSystem()->GetNozzleFlowType(1) - 1);
             NozzleVolumeType preset_left_type  = NozzleVolumeType(nozzle_volumes_values[0]);
             NozzleVolumeType preset_right_type  = NozzleVolumeType(nozzle_volumes_values[1]);
-            is_same_as_printer = (left_nozzle_type == preset_left_type && right_nozzle_type == preset_right_type);
+            // [Vortek] H2C: Hybrid preset type (nvtHybrid=2) accepts any printer flow type
+            // (Standard or HighFlow) since the extruder supports both nozzle types.
+            // Without this, Hybrid always mismatches → sync dialog shown on every Preview switch.
+            // Reference to BBS: Hybrid is a preset abstraction, firmware reports concrete types.
+            auto types_match = [](NozzleVolumeType preset, NozzleVolumeType printer) -> bool {
+                if (preset == NozzleVolumeType(2)) // nvtHybrid
+                    return true;
+                return preset == printer;
+            };
+            is_same_as_printer = (types_match(preset_left_type, left_nozzle_type) && types_match(preset_right_type, right_nozzle_type));
         }
 
         std::vector<std::map<int, int>> ams_count_info;
@@ -18109,13 +18122,17 @@ void Plater::apply_background_progress()
     if (preset_bundle->get_printer_extruder_count() > 1) {
         std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
         if (Vortek::is_h2c_printer(preset_bundle)) {
-            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
-            auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
-            if (opt_vm) {
-                opt_vm->values = f_volume_maps;
+            // [Vortek] Sync plate-level filament_map_mode to project_config for Manual mode guards.
+            {
+                auto plate_mode = part_plate->get_real_filament_map_mode(preset_bundle->project_config);
+                auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+                if (opt_mode) opt_mode->value = plate_mode;
             }
+            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+            invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
+        } else {
+            invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
         }
-        invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
     }
     else
         invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false));
@@ -18161,13 +18178,17 @@ int Plater::select_plate(int plate_index, bool need_slice)
         if (preset_bundle->get_printer_extruder_count() > 1) {
             std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
             if (Vortek::is_h2c_printer(preset_bundle)) {
-                auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
-                auto* opt_vm = preset_bundle->project_config.option<ConfigOptionInts>("filament_volume_map", true);
-                if (opt_vm) {
-                    opt_vm->values = f_volume_maps;
+                // [Vortek] Sync plate-level filament_map_mode to project_config for Manual mode guards.
+                {
+                    auto plate_mode = part_plate->get_real_filament_map_mode(preset_bundle->project_config);
+                    auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+                    if (opt_mode) opt_mode->value = plate_mode;
                 }
+                auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+                invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
+            } else {
+                invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
             }
-            invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
         }
         else
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false));
@@ -18625,7 +18646,18 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
             //always apply the current plate's print
             if (preset_bundle->get_printer_extruder_count() > 1) {
                 std::vector<int> f_maps = part_plate->get_real_filament_maps(preset_bundle->project_config);
-                invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
+                if (Vortek::is_h2c_printer(preset_bundle)) {
+                    // [Vortek] Sync plate-level filament_map_mode to project_config for Manual mode guards.
+                    {
+                        auto plate_mode = part_plate->get_real_filament_map_mode(preset_bundle->project_config);
+                        auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
+                        if (opt_mode) opt_mode->value = plate_mode;
+                    }
+                    auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+                    invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
+                } else {
+                    invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
+                }
             }
             else
                 invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false));
