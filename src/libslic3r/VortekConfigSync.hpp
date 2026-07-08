@@ -254,6 +254,7 @@
  */
 
 #include "libslic3r/PrintConfig.hpp"
+#include "VortekKeys.hpp"
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -291,19 +292,10 @@ public:
     /// @return Number of keys restored.
     int restore_variants(Slic3r::DynamicPrintConfig& new_full_config);
 
-    // ────────────────────── Key Sets (static) ──────────────────────
+    // ────────────────────── Key Queries (delegated to VortekKeys) ──────────────────────
 
-    /// Category 3: Computed map keys injected by Vortek hooks.
-    static const std::vector<std::string>& computed_keys();
-
-    /// Category 4: Temperature keys expanded by variant resolution.
-    static const std::vector<std::string>& temperature_keys();
-
-    /// Category 1: Filament variant keys (filament_options_with_variant + filament_self_index).
-    static std::set<std::string> filament_variant_keys();
-
-    /// Full set of all managed keys (union of categories 1-4).
-    static const std::unordered_set<std::string>& managed_keys();
+    /// Full set of all managed keys (union of sync/filter keys from registry).
+    static const std::unordered_set<std::string>& managed_keys() { return Keys::managed_set(); }
 
     // ────────────────────── Diff Filtering (static) ──────────────────────
 
@@ -313,16 +305,31 @@ public:
     /// Filter computed map keys from an unordered_set diff. Returns count suppressed.
     static size_t filter_computed_keys(std::unordered_set<std::string>& diff_set);
 
-    /// Suppress false retract key diffs caused by filament_map vs filament_map_2 mismatch.
-    /// print_config_diffs uses filament_map (extruder IDs) for apply_override, but
-    /// sync_baseline wrote m_config with values computed via filament_map_2 (variant indices).
-    /// Recomputes retract keys with old filament_map and erases diffs where result matches.
-    /// Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
-    /// @return Number of retract keys suppressed.
-    static size_t suppress_retract_override_diffs(
-        std::unordered_set<std::string>& print_diff_set,
-        const Slic3r::PrintConfig& config,
-        const Slic3r::DynamicPrintConfig& new_full_config);
+    // ────────────────────── Variant Override (static) ──────────────────────
+
+    /// Returns correct indices for apply_override:
+    /// - H2C: filament_map_2 (variant indices, +1 for 1-based) — maps filament → variant slot
+    /// - Standard: filament_map (extruder IDs, already 1-based) — default BBS behaviour
+    /// Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp
+    static std::vector<int> get_override_indices(const Slic3r::DynamicPrintConfig& config);
+
+    /// Apply retract overrides using correct variant indices.
+    /// Shared helper replacing duplicated retract override blocks in PrintHooks.
+    /// Calls compute_filament_override_value for all extruder_retract_keys using
+    /// get_override_indices, then applies overrides to full configs and placeholder_parser.
+    /// Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp (compute_filament_override_value)
+    static void apply_retract_overrides(Slic3r::Print& print);
+
+    // ────────────────────── Sync Helpers (static) ──────────────────────
+
+    /// Copy managed keys between configs using the specified attribute selector.
+    /// - sync_align: skips retract keys (avoids double-override in print_config_diffs)
+    /// - sync_baseline: includes retract keys (post-override values for m_config)
+    static int sync_keys_between(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst,
+                                  bool Keys::KeyDef::* attr);
+
+    /// Convenience overload: defaults to sync_baseline attribute.
+    static int sync_keys_between(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
 
 private:
     Slic3r::Print& m_print;
@@ -331,8 +338,6 @@ private:
     /// DynamicPrintConfig: uses clone+set_key_value (full vector resize).
     /// Static configs: uses operator= (fixed storage).
     static bool copy_key(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst, const std::string& key);
-    static int sync_all_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
-    static int sync_variant_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
 };
 
 } // namespace Vortek

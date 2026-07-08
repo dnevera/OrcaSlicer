@@ -1,9 +1,9 @@
 #include "VortekConfigSync.hpp"
+#include "VortekKeys.hpp"
 #include "Print.hpp"
 #include "VortekLog.hpp"
 
 namespace Slic3r {
-extern std::set<std::string> filament_options_with_variant;
 extern const PrintConfigDef  print_config_def;
 }
 
@@ -12,47 +12,6 @@ namespace Vortek {
 // ────────────────────── Constructor ──────────────────────
 
 ConfigSync::ConfigSync(Slic3r::Print& print) : m_print(print) {}
-
-// ────────────────────── Key Sets ──────────────────────
-
-const std::vector<std::string>& ConfigSync::computed_keys() {
-    static const std::vector<std::string> keys = {
-        "filament_map", "filament_volume_map", "filament_nozzle_map",
-        "filament_map_2", "filament_extruder_variant",
-        "physical_extruder_map", "filament_self_index"
-    };
-    return keys;
-}
-
-const std::vector<std::string>& ConfigSync::temperature_keys() {
-    static const std::vector<std::string> keys = {
-        "nozzle_temperature", "nozzle_temperature_initial_layer",
-        "filament_pre_cooling_temperature_nc"
-    };
-    return keys;
-}
-
-std::set<std::string> ConfigSync::filament_variant_keys() {
-    std::set<std::string> keys = Slic3r::filament_options_with_variant;
-    keys.insert("filament_self_index");
-    return keys;
-}
-
-const std::unordered_set<std::string>& ConfigSync::managed_keys() {
-    static std::unordered_set<std::string> keys;
-    if (keys.empty()) {
-        for (const auto& k : Slic3r::filament_options_with_variant)
-            keys.insert(k);
-        keys.insert("filament_self_index");
-        for (const auto& k : Slic3r::print_config_def.extruder_retract_keys())
-            keys.insert(k);
-        for (const auto& k : computed_keys())
-            keys.insert(k);
-        for (const auto& k : temperature_keys())
-            keys.insert(k);
-    }
-    return keys;
-}
 
 // ────────────────────── Private Helpers ──────────────────────
 
@@ -78,67 +37,50 @@ bool ConfigSync::copy_key(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst
     return false;
 }
 
-int ConfigSync::sync_all_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst) {
+// ────────────────────── Sync Helpers ──────────────────────
+
+int ConfigSync::sync_keys_between(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst,
+                                   bool Keys::KeyDef::* attr) {
     int copied = 0;
 
-    // Filament variant keys
+    // 1. All registry keys matching the requested attribute
+    for (const auto& kd : Keys::registry()) {
+        if (kd.*attr && copy_key(src, dst, kd.name))
+            ++copied;
+    }
+
+    // 2. BBS retract keys + filament_ prefixed counterparts
+    // These are BBS base-layer keys in our registry as Retract group.
+    // For baseline: always copy (retract keys have sync_baseline=true).
+    // For align: skip retract keys (sync_align=false) to avoid double-override.
+    // filament_ prefixed keys are always needed for override resolution.
+    for (const auto& rk : Slic3r::print_config_def.extruder_retract_keys()) {
+        // retract key itself is covered by registry loop above (step 1)
+        // Only copy filament_ prefix here
+        if (copy_key(src, dst, "filament_" + rk)) ++copied;
+    }
+
+    // 3. Filament variant keys (from filament_options_with_variant in BBS base layer)
     for (const auto& key : Slic3r::filament_options_with_variant) {
-        if (copy_key(src, dst, key)) ++copied;
-    }
-    if (copy_key(src, dst, "filament_self_index")) ++copied;
-
-    // Retract keys (machine-level + filament_ prefixed)
-    for (const auto& opt_key : Slic3r::print_config_def.extruder_retract_keys()) {
-        if (copy_key(src, dst, opt_key)) ++copied;
-        if (copy_key(src, dst, "filament_" + opt_key)) ++copied;
-    }
-
-    // Computed map keys
-    for (const auto& key : computed_keys()) {
-        if (copy_key(src, dst, key)) ++copied;
-    }
-
-    // Temperature keys
-    for (const auto& key : temperature_keys()) {
         if (copy_key(src, dst, key)) ++copied;
     }
 
     return copied;
 }
 
-int ConfigSync::sync_variant_keys(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst) {
-    int copied = 0;
-    for (const auto& key : Slic3r::filament_options_with_variant) {
-        if (copy_key(src, dst, key)) ++copied;
-    }
-    return copied;
+// Overload for VortekGCode sync (uses sync_baseline by default)
+int ConfigSync::sync_keys_between(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst) {
+    return sync_keys_between(src, dst, &Keys::KeyDef::sync_baseline);
 }
 
 // ────────────────────── Orchestrated Operations ──────────────────────
 
 int ConfigSync::align_incoming_config(Slic3r::DynamicPrintConfig& new_full_config) {
-    // [DIAG] Log retraction_length sizes before sync
-    {
-        const auto* src = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(m_print.m_full_print_config.option("retraction_length"));
-        const auto* dst = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(new_full_config.option("retraction_length"));
-        VORTEK_LOG(warn, "ConfigSync::align BEFORE: retraction_length src_size="
-            << (src ? src->size() : 0) << " dst_size=" << (dst ? dst->size() : 0)
-            << " src='" << (src ? m_print.m_full_print_config.option("retraction_length")->serialize() : "null") << "'"
-            << " dst='" << (dst ? new_full_config.option("retraction_length")->serialize() : "null") << "'");
-    }
-
     // Direction: m_full_print_config (source of truth) → new_full_config
-    int copied = sync_all_keys(m_print.m_full_print_config, new_full_config);
-
-    // [DIAG] Log retraction_length sizes after sync
-    {
-        const auto* src = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(m_print.m_full_print_config.option("retraction_length"));
-        const auto* dst = dynamic_cast<const Slic3r::ConfigOptionVectorBase*>(new_full_config.option("retraction_length"));
-        VORTEK_LOG(warn, "ConfigSync::align AFTER: retraction_length src_size="
-            << (src ? src->size() : 0) << " dst_size=" << (dst ? dst->size() : 0)
-            << " src='" << (src ? m_print.m_full_print_config.option("retraction_length")->serialize() : "null") << "'"
-            << " dst='" << (dst ? new_full_config.option("retraction_length")->serialize() : "null") << "'");
-    }
+    // Uses sync_align: skips retract keys (sync_align=false) to avoid double-override
+    // in print_config_diffs which re-applies apply_override on these keys.
+    int copied = sync_keys_between(m_print.m_full_print_config, new_full_config,
+                                    &Keys::KeyDef::sync_align);
 
     VORTEK_LOG(warn, "ConfigSync::align_incoming_config: copied " << copied
         << " keys from m_full_print_config → new_full_config");
@@ -147,8 +89,10 @@ int ConfigSync::align_incoming_config(Slic3r::DynamicPrintConfig& new_full_confi
 
 int ConfigSync::sync_baseline() {
     // Direction: m_full_print_config (source of truth) → m_config (comparison baseline)
-    // After this, next Print::apply() will see m_config == new_full_config for managed keys
-    int synced = sync_all_keys(m_print.m_full_print_config, m_print.m_config);
+    // Uses sync_baseline: includes retract keys (post-override values) so that
+    // print_config_diffs comparison yields 0 diff for these keys.
+    int synced = sync_keys_between(m_print.m_full_print_config, m_print.m_config,
+                                    &Keys::KeyDef::sync_baseline);
     VORTEK_LOG(warn, "ConfigSync::sync_baseline: synced " << synced
         << " keys from m_full_print_config → m_config");
     return synced;
@@ -156,8 +100,18 @@ int ConfigSync::sync_baseline() {
 
 int ConfigSync::restore_variants(Slic3r::DynamicPrintConfig& new_full_config) {
     // Direction: m_ori_full_print_config (pre-expansion) → new_full_config
-    // Undoes wrong upstream expansion for filament variant keys
-    int restored = sync_variant_keys(m_print.m_ori_full_print_config, new_full_config);
+    // Restore filament variant keys to pre-expansion state
+    int restored = 0;
+    for (const auto& kd : Keys::registry()) {
+        if (kd.variant_expanded &&
+            copy_key(m_print.m_ori_full_print_config, new_full_config, kd.name))
+            ++restored;
+    }
+    // Also restore BBS filament variant keys not in our registry
+    for (const auto& key : Slic3r::filament_options_with_variant) {
+        if (copy_key(m_print.m_ori_full_print_config, new_full_config, key))
+            ++restored;
+    }
     VORTEK_LOG(warn, "ConfigSync::restore_variants: restored " << restored
         << " filament variant keys from m_ori_full_print_config → new_full_config");
     return restored;
@@ -167,7 +121,7 @@ int ConfigSync::restore_variants(Slic3r::DynamicPrintConfig& new_full_config) {
 
 size_t ConfigSync::filter_managed_keys(Slic3r::t_config_option_keys& diff) {
     if (diff.empty()) return 0;
-    const auto& keys = managed_keys();
+    const auto& keys = Keys::managed_set();
     Slic3r::t_config_option_keys filtered;
     filtered.reserve(diff.size());
     for (const auto& k : diff) {
@@ -181,52 +135,55 @@ size_t ConfigSync::filter_managed_keys(Slic3r::t_config_option_keys& diff) {
 }
 
 size_t ConfigSync::filter_computed_keys(std::unordered_set<std::string>& diff_set) {
-    size_t suppressed = 0;
-    for (const auto& k : computed_keys()) {
-        suppressed += diff_set.erase(k);
-    }
-    return suppressed;
+    return Keys::filter_by_attr(diff_set, &Keys::KeyDef::computed);
 }
 
-size_t ConfigSync::suppress_retract_override_diffs(
-    std::unordered_set<std::string>& print_diff_set,
-    const Slic3r::PrintConfig& config,
-    const Slic3r::DynamicPrintConfig& new_full_config)
-{
-    // BBS retract recompute pattern: suppress false retract diffs.
-    // print_config_diffs uses filament_map (extruder IDs) for apply_override,
-    // but sync_baseline wrote m_config with filament_map_2 (variant indices).
-    // Recompute retract keys with old filament_map and suppress those that
-    // match m_config — same mechanism as BBS PrintApply.cpp L1445-1463.
-    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
-    if (print_diff_set.empty()) return 0;
+// ────────────────────── Variant Override ──────────────────────
 
-    const auto& retract_keys = Slic3r::print_config_def.extruder_retract_keys();
-    const std::string filament_prefix = "filament_";
-    const auto& old_filament_map = config.filament_map.values;
-
-    std::vector<int> old_f_map_indices(old_filament_map.size(), 0);
-    for (size_t i = 0; i < old_filament_map.size(); i++)
-        old_f_map_indices[i] = old_filament_map[i] - 1;
-
-    size_t suppressed = 0;
-    for (const auto& rk : retract_keys) {
-        if (print_diff_set.find(rk) == print_diff_set.end())
-            continue;
-        const Slic3r::ConfigOption* opt_old   = config.option(rk);
-        const Slic3r::ConfigOption* opt_new_m = new_full_config.option(rk);
-        const Slic3r::ConfigOption* opt_new_f = new_full_config.option(filament_prefix + rk);
-        if (opt_old && opt_new_m && opt_new_f) {
-            std::unique_ptr<Slic3r::ConfigOption> opt_recomputed(opt_new_m->clone());
-            opt_recomputed->apply_override(opt_new_f, old_f_map_indices);
-            if (*opt_old == *opt_recomputed) {
-                print_diff_set.erase(rk);
-                ++suppressed;
-                VORTEK_LOG(warn, "ConfigSync::suppress_retract_override_diffs: suppressed '" << rk << "'");
-            }
-        }
+std::vector<int> ConfigSync::get_override_indices(const Slic3r::DynamicPrintConfig& config) {
+    // H2C: filament_map_2 contains variant indices (0-based).
+    // apply_override expects 1-based → +1.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp
+    auto* map2 = config.option<Slic3r::ConfigOptionInts>(Keys::k_filament_map_2);
+    if (map2 && !map2->values.empty()) {
+        std::vector<int> indices = map2->values;
+        for (auto& v : indices) v += 1;  // apply_override uses 1-based indexing
+        VORTEK_LOG(warn, "ConfigSync::get_override_indices: using filament_map_2 (H2C), size=" << indices.size());
+        return indices;
     }
-    return suppressed;
+    // Standard: filament_map (extruder IDs, already 1-based)
+    auto* map = config.option<Slic3r::ConfigOptionInts>("filament_map");
+    return map ? map->values : std::vector<int>();
+}
+
+void ConfigSync::apply_retract_overrides(Slic3r::Print& print) {
+    // Shared helper: compute retract overrides using correct variant indices.
+    // Replaces duplicated code blocks in VortekPrintHooks.cpp.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintConfig.cpp (compute_filament_override_value)
+    const auto& retract_keys = Slic3r::print_config_def.extruder_retract_keys();
+    auto indices = get_override_indices(print.m_full_print_config);
+
+    if (indices.empty()) return;
+
+    const std::string filament_prefix = "filament_";
+    Slic3r::t_config_option_keys diff;
+    Slic3r::DynamicPrintConfig overrides;
+
+    for (const auto& opt_key : retract_keys) {
+        const Slic3r::ConfigOption* opt_fil = print.m_full_print_config.option(filament_prefix + opt_key);
+        const Slic3r::ConfigOption* opt_new = print.m_full_print_config.option(opt_key);
+        if (opt_fil && opt_new)
+            Slic3r::compute_filament_override_value(opt_key, opt_new, opt_new, opt_fil,
+                print.m_full_print_config, diff, overrides, indices);
+    }
+
+    if (!diff.empty()) {
+        print.m_placeholder_parser.apply_config(overrides);
+        print.m_full_print_config.apply(overrides);
+        print.m_ori_full_print_config.apply(overrides);
+        VORTEK_LOG(warn, "ConfigSync::apply_retract_overrides: applied " << diff.size()
+            << " retract overrides with variant indices");
+    }
 }
 
 } // namespace Vortek

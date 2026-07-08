@@ -20,6 +20,7 @@
 #include "Model.hpp"
 #include "format.hpp"
 #include "VortekPrintHooks.hpp"
+#include "VortekConfigSync.hpp"
 #include <float.h>
 
 #include <algorithm>
@@ -3217,6 +3218,10 @@ void Print::update_filament_maps_to_config(std::vector<int> f_maps)
         const std::string               filament_prefix       = "filament_";
         t_config_option_keys            print_diff;
         DynamicPrintConfig              filament_overrides;
+        // [Vortek] H2C: use variant indices (filament_map_2) for apply_override.
+        // Standard printers fall through to filament_map (f_maps).
+        // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp
+        auto override_indices = Vortek::ConfigSync::get_override_indices(m_full_print_config);
         for (auto& opt_key: extruder_retract_keys)
         {
             const ConfigOption *opt_new_filament = m_full_print_config.option(filament_prefix + opt_key);
@@ -3224,7 +3229,7 @@ void Print::update_filament_maps_to_config(std::vector<int> f_maps)
             const ConfigOption *opt_old_machine = m_config.option(opt_key);
 
             if (opt_new_filament)
-                compute_filament_override_value(opt_key, opt_old_machine, opt_new_machine, opt_new_filament, m_full_print_config, print_diff, filament_overrides, f_maps);
+                compute_filament_override_value(opt_key, opt_old_machine, opt_new_machine, opt_new_filament, m_full_print_config, print_diff, filament_overrides, override_indices);
         }
 
         t_config_option_keys keys(filament_options_with_variant.begin(), filament_options_with_variant.end());

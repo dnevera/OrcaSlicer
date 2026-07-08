@@ -33,21 +33,21 @@ void PlateMapping::sync_after_slicing(
     const auto& full_cfg = print->full_print_config();
     std::vector<int> map_2;
     std::vector<int> phys_map;
-    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_map_2"))
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_map_2))
         map_2 = opt->values;
-    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("physical_extruder_map"))
+    if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_physical_extruder_map))
         phys_map = opt->values;
 
     // CRITICAL: Sync ALL computed maps to preset_bundle.project_config.
     // full_config() is built from project_config (NOT plate_config), so without this
     // the next Print::apply() gets stale defaults → config drift → double-slicing.
     auto& proj = preset_bundle.project_config;
-    proj.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts(nozzle_map));
-    proj.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
+    proj.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
+    proj.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
     if (!map_2.empty())
-        proj.set_key_value("filament_map_2", new Slic3r::ConfigOptionInts(map_2));
+        proj.set_key_value(Vortek::Keys::k_filament_map_2, new Slic3r::ConfigOptionInts(map_2));
     if (!phys_map.empty())
-        proj.set_key_value("physical_extruder_map", new Slic3r::ConfigOptionInts(phys_map));
+        proj.set_key_value(Vortek::Keys::k_physical_extruder_map, new Slic3r::ConfigOptionInts(phys_map));
 
     if (filament_map_mode != Slic3r::fmmManual && filament_map_mode != Slic3r::fmmNozzleManual) {
         VORTEK_LOG(warn, "sync_after_slicing: auto mode — synced project_config only (plate_config skipped)");
@@ -57,14 +57,14 @@ void PlateMapping::sync_after_slicing(
     VORTEK_LOG(warn, "sync_after_slicing: updating nozzle maps in plate config and project config");
 
     bool changed = false;
-    auto* opt_nozzle = plate_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map");
+    auto* opt_nozzle = plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map);
     if (!opt_nozzle || opt_nozzle->values != nozzle_map) {
-        plate_config.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts(nozzle_map));
+        plate_config.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
         changed = true;
     }
-    auto* opt_volume = plate_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+    auto* opt_volume = plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
     if (!opt_volume || opt_volume->values != volume_map) {
-        plate_config.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
+        plate_config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
         changed = true;
     }
 
@@ -79,11 +79,11 @@ void PlateMapping::handle_filament_count_changed(Slic3r::DynamicPrintConfig* con
 {
     if (!config) return;
     VORTEK_LOG(debug, "handle_filament_count_changed: resizing maps to " << filament_count);
-    if (config->has("filament_nozzle_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values.resize(filament_count, 1);
+    if (config->has(Vortek::Keys::k_filament_nozzle_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values.resize(filament_count, 1);
     }
-    if (config->has("filament_volume_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_volume_map")->values.resize(filament_count, 1);
+    if (config->has(Vortek::Keys::k_filament_volume_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)->values.resize(filament_count, 1);
     }
 }
 
@@ -91,11 +91,11 @@ void PlateMapping::handle_filament_added(Slic3r::DynamicPrintConfig* config)
 {
     if (!config) return;
     VORTEK_LOG(debug, "handle_filament_added: appending default mapping values");
-    if (config->has("filament_nozzle_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values.push_back(1);
+    if (config->has(Vortek::Keys::k_filament_nozzle_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values.push_back(1);
     }
-    if (config->has("filament_volume_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_volume_map")->values.push_back(1);
+    if (config->has(Vortek::Keys::k_filament_volume_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)->values.push_back(1);
     }
 }
 
@@ -103,13 +103,13 @@ void PlateMapping::handle_filament_deleted(Slic3r::DynamicPrintConfig* config, i
 {
     if (!config) return;
     VORTEK_LOG(debug, "handle_filament_deleted: erasing mapping at index " << filament_id);
-    if (config->has("filament_nozzle_map")) {
-        auto& vals = config->option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
+    if (config->has(Vortek::Keys::k_filament_nozzle_map)) {
+        auto& vals = config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values;
         if (filament_id >= 0 && filament_id < (int)vals.size())
             vals.erase(vals.begin() + filament_id);
     }
-    if (config->has("filament_volume_map")) {
-        auto& vals = config->option<Slic3r::ConfigOptionInts>("filament_volume_map")->values;
+    if (config->has(Vortek::Keys::k_filament_volume_map)) {
+        auto& vals = config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)->values;
         if (filament_id >= 0 && filament_id < (int)vals.size())
             vals.erase(vals.begin() + filament_id);
     }
@@ -119,11 +119,11 @@ void PlateMapping::clear_mappings(Slic3r::DynamicPrintConfig* config)
 {
     if (!config) return;
     VORTEK_LOG(debug, "clear_mappings: clearing all nozzle/volume mappings");
-    if (config->has("filament_nozzle_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values.clear();
+    if (config->has(Vortek::Keys::k_filament_nozzle_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values.clear();
     }
-    if (config->has("filament_volume_map")) {
-        config->option<Slic3r::ConfigOptionInts>("filament_volume_map")->values.clear();
+    if (config->has(Vortek::Keys::k_filament_volume_map)) {
+        config->option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)->values.clear();
     }
 }
 
@@ -135,19 +135,19 @@ void PlateMapping::sync_project_config_on_load(Slic3r::DynamicConfig& proj_cfg, 
     VORTEK_LOG(warn, "sync_project_config_on_load: verifying loaded map sizes");
     
     // Сброс MQTT-зависимых флагов, которые должны приходить с принтера, а не считываться из 3MF
-    if (auto* p = proj_cfg.option<Slic3r::ConfigOptionBool>("has_filament_switcher"))
+    if (auto* p = proj_cfg.option<Slic3r::ConfigOptionBool>(Vortek::Keys::k_has_filament_switcher))
         p->value = false;
-    if (auto* p = proj_cfg.option<Slic3r::ConfigOptionBool>("enable_filament_dynamic_map"))
+    if (auto* p = proj_cfg.option<Slic3r::ConfigOptionBool>(Vortek::Keys::k_enable_filament_dynamic_map))
         p->value = false;
 
     // Синхронизация filament_nozzle_map (дефолт 0 — первое сопло)
-    auto* nozzle_map = proj_cfg.opt<Slic3r::ConfigOptionInts>("filament_nozzle_map", true);
+    auto* nozzle_map = proj_cfg.opt<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map, true);
     if ((int)nozzle_map->values.size() != filament_count) {
         nozzle_map->values.resize(filament_count, 0);
     }
 
     // Синхронизация filament_volume_map (дефолт 1 — стандартный объем / nvtStandard)
-    auto* volume_map = proj_cfg.opt<Slic3r::ConfigOptionInts>("filament_volume_map", true);
+    auto* volume_map = proj_cfg.opt<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map, true);
     if ((int)volume_map->values.size() != filament_count) {
         volume_map->values.resize(filament_count, 1);
     }
@@ -187,25 +187,25 @@ std::vector<int> PlateMapping::get_nozzle_map_for_export(const Slic3r::Print* pr
     // set_filament_nozzle_maps() with the correct multi-element array.
     // print->full_print_config() may have been reset by a subsequent Print::apply() call.
     // So: prefer plate_config if it has >1 element (post-slice initialized), else fall back to print.
-    if (plate_config.has("filament_nozzle_map")) {
-        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map");
+    if (plate_config.has(Vortek::Keys::k_filament_nozzle_map)) {
+        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map);
         if (plate_opt && plate_opt->values.size() > 1) {
             VORTEK_LOG(warn, "get_nozzle_map_for_export: using plate_config nozzle map (" << plate_opt->values.size() << " elements)");
             return plate_opt->values;
         }
     }
     // Fallback: try print->full_print_config() (valid immediately after slicing)
-    if (print && plate_config.has("filament_nozzle_map")) {
+    if (print && plate_config.has(Vortek::Keys::k_filament_nozzle_map)) {
         const auto& full_cfg = print->full_print_config();
-        if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")) {
+        if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)) {
             if (opt->values.size() > 1) {
                 VORTEK_LOG(warn, "get_nozzle_map_for_export: using print-derived nozzle map (" << opt->values.size() << " elements)");
                 return opt->values;
             }
         }
     }
-    if (plate_config.has("filament_nozzle_map")) {
-        return plate_config.option<Slic3r::ConfigOptionInts>("filament_nozzle_map")->values;
+    if (plate_config.has(Vortek::Keys::k_filament_nozzle_map)) {
+        return plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values;
     }
     return {};
 }
@@ -222,8 +222,8 @@ std::vector<int> PlateMapping::get_volume_map_for_export(const Slic3r::Print* pr
     //   2. print->full_print_config() — valid immediately after slicing, before a subsequent
     //      Print::apply() call may have reset it.
     //   3. Empty — no volume map available, caller handles the absence.
-    if (plate_config.has("filament_volume_map")) {
-        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>("filament_volume_map");
+    if (plate_config.has(Vortek::Keys::k_filament_volume_map)) {
+        auto* plate_opt = plate_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
         if (plate_opt && !plate_opt->values.empty()) {
             VORTEK_LOG(warn, "get_volume_map_for_export: using plate_config volume map ("
                        << plate_opt->values.size() << " elements)");
@@ -233,7 +233,7 @@ std::vector<int> PlateMapping::get_volume_map_for_export(const Slic3r::Print* pr
     // Fallback: try print->full_print_config() (valid immediately after slicing)
     if (print) {
         const auto& full_cfg = print->full_print_config();
-        if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>("filament_volume_map")) {
+        if (auto* opt = full_cfg.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map)) {
             if (!opt->values.empty()) {
                 VORTEK_LOG(warn, "get_volume_map_for_export: plate_config empty, using print-derived volume map ("
                            << opt->values.size() << " elements)");
@@ -256,7 +256,7 @@ void PlateMapping::patch_plate_data_for_export(
 {
     if (!plate_data) return;
     if (print && !is_h2c_printer(*print)) return;
-    if (!print && !config.has("filament_nozzle_map")) return;
+    if (!print && !config.has(Vortek::Keys::k_filament_nozzle_map)) return;
 
     VORTEK_LOG(warn, "patch_plate_data_for_export for plate index " << plate_data->plate_index);
 
@@ -268,8 +268,8 @@ void PlateMapping::patch_plate_data_for_export(
         volume_map = get_volume_map_for_export(print, config);
     }
 
-    plate_data->config.set_key_value("filament_nozzle_map", new Slic3r::ConfigOptionInts(nozzle_map));
-    plate_data->config.set_key_value("filament_volume_map", new Slic3r::ConfigOptionInts(volume_map));
+    plate_data->config.set_key_value(Vortek::Keys::k_filament_nozzle_map, new Slic3r::ConfigOptionInts(nozzle_map));
+    plate_data->config.set_key_value(Vortek::Keys::k_filament_volume_map, new Slic3r::ConfigOptionInts(volume_map));
 }
 
 
@@ -313,26 +313,22 @@ void PlateMapping::filter_print_diff_set(
     // Only for Vortek H2C — P2S/H2D and standard printers must NOT be affected.
     if (!is_h2c_printer(config)) return;
 
-    // Vortek computed map keys injected by sync_after_slicing — must not trigger re-slice
-    for (const auto& k : Vortek::ConfigSync::computed_keys()) {
-        if (print_diff_set.erase(k) > 0) {
-            // Sync the value in full_print_config to match new_full_config,
+    // Data-driven: suppress all keys with filter_print_diff=true from registry
+    for (const auto& kd : Vortek::Keys::registry()) {
+        if (kd.filter_print_diff && print_diff_set.erase(kd.name) > 0) {
+            // For computed keys: sync value in full_print_config to match new_full_config,
             // so next Print::apply won't see this key in diff again
-            if (new_full_config.has(k)) {
-                auto* new_opt = new_full_config.option(k);
+            if (kd.computed && new_full_config.has(kd.name)) {
+                auto* new_opt = new_full_config.option(kd.name);
                 if (new_opt) {
-                    full_print_config.set_key_value(k, new_opt->clone());
+                    full_print_config.set_key_value(kd.name, new_opt->clone());
                 }
             }
-            VORTEK_LOG(warn, "filter_print_diff_set: suppressed and synced key '" << k << "'");
+            VORTEK_LOG(warn, "filter_print_diff_set: suppressed key '" << kd.name << "'");
         }
     }
-
-    // BBS retract recompute: suppress false retract diffs caused by
-    // filament_map vs filament_map_2 mismatch. Delegated to ConfigSync
-    // (sync layer owns this semantic — resolves apply_override index divergence).
-    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp L1445-1463
-    Vortek::ConfigSync::suppress_retract_override_diffs(print_diff_set, config, new_full_config);
+    // Note: suppress_retract_override_diffs removed — root cause fixed by
+    // get_override_indices() in PrintApply.cpp (filament_map_2 for H2C).
 }
 
 void PlateMapping::filter_reslice_diffs(
@@ -347,11 +343,12 @@ void PlateMapping::filter_reslice_diffs(
     auto erase_key = [](Slic3r::t_config_option_keys& keys, const std::string& key) {
         keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
     };
-    // All Vortek computed/derived keys that are recomputed on every apply()
-    // and must not trigger re-slice invalidation.
-    for (const auto& key : Vortek::ConfigSync::computed_keys()) {
-        erase_key(print_diff, key);
-        erase_key(full_config_diff, key);
+    // Data-driven: suppress all keys with filter_reslice_diff=true from registry
+    for (const auto& kd : Vortek::Keys::registry()) {
+        if (kd.filter_reslice_diff) {
+            erase_key(print_diff, kd.name);
+            erase_key(full_config_diff, kd.name);
+        }
     }
 
     // H2C Hybrid: suppress extruder_nozzle_stats diff when only std_count changes.
@@ -364,7 +361,7 @@ void PlateMapping::filter_reslice_diffs(
     auto suppress_nozzle_stats_if_hf_stable = [&](Slic3r::t_config_option_keys& diff_keys,
                                                    const Slic3r::ConfigBase& old_cfg)
     {
-        static const std::string key = "extruder_nozzle_stats";
+        static const std::string key = Vortek::Keys::k_extruder_nozzle_stats;
         auto it = std::find(diff_keys.begin(), diff_keys.end(), key);
         if (it == diff_keys.end()) return;
 
@@ -506,18 +503,19 @@ void PlateMapping::restore_filament_variant_overrides_h2c(
     }
 
     // If align_incoming_config already ran (nozzle_group_result exists),
-    // skip restore — align already wrote correct H2C-expanded values from
-    // m_full_print_config (source of truth, size=6 with proper nozzle mapping).
-    // Calling restore here would overwrite them with upstream-expanded values
-    // from m_ori_full_print_config (wrong size/layout), causing false diffs.
+    // skip — align already wrote correct H2C-expanded values.
     auto group_result = print.get_nozzle_group_result();
     if (group_result) {
         return;
     }
 
-    // First apply only: undo upstream variant expansion
-    Vortek::ConfigSync sync(print);
-    sync.restore_variants(new_full_config);
+    // First apply: do NOT call restore_variants.
+    // GUI's full_fff_config() already correctly expands filament variant keys
+    // to size = N_filaments × N_nozzle_types (e.g. 6 × 2 = 12).
+    // restore_variants would overwrite these with pre-expansion values from
+    // m_ori_full_print_config (size=6), causing persistent diff → reslice.
+    VORTEK_LOG(warn, "restore_filament_variant_overrides_h2c: first apply, "
+        "keeping GUI variant expansion as-is (no restore_variants)");
 }
 
 // [Vortek] Override upstream filament variant expansion with BBS-style nozzle_group_result mapping.

@@ -2,6 +2,7 @@
 #include "Model.hpp"
 #include "Print.hpp"
 #include "VortekPlateMapping.hpp"
+#include "VortekConfigSync.hpp"
 
 #include <boost/log/trivial.hpp>
 #include <cfloat>
@@ -1196,8 +1197,11 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     //     }
     // }
 
-    auto opt_filament_map = new_full_config.option<ConfigOptionInts>("filament_map");
-    std::vector<int> filament_maps = opt_filament_map ? opt_filament_map->values : std::vector<int>();
+    // [Vortek] H2C: use variant indices (filament_map_2) for apply_override so that
+    // retract keys get correct HF-variant values. Standard printers fall through to filament_map.
+    // This fixes root cause of WipeTower/GCode reading wrong retract values for HF filaments.
+    // Reference to BBS: BambuStudio/src/libslic3r/PrintApply.cpp
+    std::vector<int> filament_maps = Vortek::ConfigSync::get_override_indices(new_full_config);
 
     // [Vortek] apply_filament_retract_overrides removed: the BBS-style variant expansion in
     // override_filament_variant_expansion now handles retract key resolution correctly,
