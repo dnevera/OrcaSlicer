@@ -227,6 +227,7 @@ constexpr const char* k_filament_deretract_speed_nc       = "filament_deretract_
 constexpr const char* k_prime_volume_mode                 = "prime_volume_mode";
 
 // Hardware
+constexpr const char* k_nozzle_volume_type                = "nozzle_volume_type";
 constexpr const char* k_extruder_max_nozzle_count         = "extruder_max_nozzle_count";
 constexpr const char* k_extruder_nozzle_stats             = "extruder_nozzle_stats";
 constexpr const char* k_machine_hotend_change_time        = "machine_hotend_change_time";

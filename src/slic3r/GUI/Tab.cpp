@@ -26,6 +26,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include "DeviceCore/VortekDeviceHooks.hpp" // H2C Vortek hooks
+#include "DeviceCore/VortekVolumeMapSync.hpp" // H2C volume map orchestration
 #include "libslic3r/libslic3r.h"
 #include "slic3r/GUI/OptionsGroup.hpp"
 #include "wxExtensions.hpp"
@@ -5637,7 +5638,7 @@ void TabPrinter::on_preset_loaded()
         if (Vortek::is_h2c_printer(m_preset_bundle)) {
             // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp: select_preset / on_preset_loaded
             // Vortek Hook: load and sync nozzle volumes & filament volumes for hybrid nozzle H2C printer
-            Vortek::DeviceHooks::sync_extruder_nozzle_stats_on_preset_select(m_preset_bundle, base_name);
+            Vortek::VolumeMapSync::sync_extruder_nozzle_stats_on_preset_select(m_preset_bundle, base_name);
         }
     }
 }
@@ -7512,7 +7513,7 @@ void TabPrinter::set_extruder_volume_type(int extruder_id, NozzleVolumeType type
     // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp:7322-7326
     // Vortek Hook: sync H2C volume maps and nozzle stats
     m_preset_bundle->extruder_nozzle_stat.set_user_override(extruder_id, true);
-    Vortek::DeviceHooks::on_extruder_volume_type_changed(m_preset_bundle, extruder_id, type);
+    Vortek::VolumeMapSync::on_extruder_volume_type_changed(m_preset_bundle, extruder_id, type);
 
     on_value_change((boost::format("nozzle_volume_type#%1%") % extruder_id).str(), int(type));
 

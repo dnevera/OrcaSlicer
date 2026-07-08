@@ -2,6 +2,7 @@
 #include "libslic3r/Config.hpp"
 #include "libslic3r/VortekPlateMapping.hpp"
 #include "slic3r/GUI/DeviceCore/VortekDeviceHooks.hpp"
+#include "slic3r/GUI/DeviceCore/VortekVolumeMapSync.hpp"
 #include "libslic3r/VortekPrintHooks.hpp"
 #include "libslic3r/VortekLog.hpp"
 #include "VortekPurgeModeDialog.hpp"
@@ -1184,7 +1185,7 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
         if (GUI::wxGetApp().plater()) {
             // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map hook
             // Vortek Hook: update filament volume maps for hybrid nozzles
-            Vortek::DeviceHooks::update_filament_volume_map(GUI::wxGetApp().plater(), index, static_cast<int>(volume_type));
+            Vortek::VolumeMapSync::update_filament_volume_map(GUI::wxGetApp().plater(), index, static_cast<int>(volume_type));
             GUI::wxGetApp().plater()->update_machine_sync_status();
         }
     });
@@ -8567,7 +8568,7 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
                 auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
                 if (opt_mode) opt_mode->value = plate_mode;
             }
-            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(cur_plate, preset_bundle->project_config);
+            auto f_volume_maps = Vortek::VolumeMapSync::get_real_filament_volume_maps(cur_plate, preset_bundle->project_config);
             invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps, f_volume_maps));
         } else {
             invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
@@ -18128,7 +18129,7 @@ void Plater::apply_background_progress()
                 auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
                 if (opt_mode) opt_mode->value = plate_mode;
             }
-            auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+            auto f_volume_maps = Vortek::VolumeMapSync::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
         } else {
             invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
@@ -18184,7 +18185,7 @@ int Plater::select_plate(int plate_index, bool need_slice)
                     auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
                     if (opt_mode) opt_mode->value = plate_mode;
                 }
-                auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+                auto f_volume_maps = Vortek::VolumeMapSync::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
                 invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
             } else {
                 invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));
@@ -18576,13 +18577,13 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
         bool volume_map_changed = false;
         if (Vortek::is_h2c_printer(wxGetApp().preset_bundle)) {
             auto new_volume_map = filament_dlg.get_filament_volume_maps();
-            volume_map_changed = Vortek::DeviceHooks::check_volume_maps_changed_hook(curr_plate, project_config, new_volume_map);
+            volume_map_changed = Vortek::VolumeMapSync::check_volume_maps_changed_hook(curr_plate, project_config, new_volume_map);
 
             if (new_map_mode == fmmManual){
                 curr_plate->set_filament_maps(new_filament_maps);
 
                 // H2C: Write filament_volume_map back to project config and plate from dialog.
-                Vortek::DeviceHooks::save_filament_volume_maps_hook(this, curr_plate, true, false, new_map_mode, new_volume_map);
+                Vortek::VolumeMapSync::save_filament_volume_maps_hook(this, curr_plate, true, false, new_map_mode, new_volume_map);
             }
         } else {
             if (new_map_mode == fmmManual){
@@ -18653,7 +18654,7 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                         auto* opt_mode = preset_bundle->project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode");
                         if (opt_mode) opt_mode->value = plate_mode;
                     }
-                    auto f_volume_maps = Vortek::DeviceHooks::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
+                    auto f_volume_maps = Vortek::VolumeMapSync::get_real_filament_volume_maps(part_plate, preset_bundle->project_config);
                     invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps, f_volume_maps));
                 } else {
                     invalidated = p->background_process.apply(this->model(), preset_bundle->full_config(false, f_maps));

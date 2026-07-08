@@ -167,4 +167,58 @@ void ConfigSync::apply_retract_overrides(Slic3r::Print& print) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Volume Map Helpers (static, pure logic — no GUI dependencies)
+// ═══════════════════════════════════════════════════════════════
+
+// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp L24395 update_filament_volume_map
+//   BBS pattern: Hybrid → reset to Std (user picks in Filament Grouping dialog),
+//   HighFlow → 1, Standard → 0.
+int ConfigSync::compute_selected_volume_type(Slic3r::NozzleVolumeType nvt)
+{
+    return nvt == Slic3r::NozzleVolumeType::nvtHybrid
+        ? 0
+        : static_cast<int>(nvt);
+}
+
+std::pair<std::vector<int>, bool> ConfigSync::compute_volume_map_for_extruder(
+    const std::vector<int>& filament_map,
+    const std::vector<int>& current_volume_map,
+    int extruder_id,
+    int selected_volume_type)
+{
+    auto result = current_volume_map;
+    if (result.size() < filament_map.size())
+        result.resize(filament_map.size(), 0);
+
+    bool changed = false;
+    for (size_t i = 0; i < filament_map.size(); ++i) {
+        // filament_map is 1-based extruder ID
+        if (filament_map[i] == extruder_id + 1) {
+            if (i < result.size() && result[i] != selected_volume_type) {
+                result[i] = selected_volume_type;
+                changed = true;
+            }
+        }
+    }
+    return {result, changed};
+}
+
+std::vector<int> ConfigSync::read_volume_map_from_config(const Slic3r::DynamicConfig& config)
+{
+    auto* opt = config.option<Slic3r::ConfigOptionInts>(Keys::k_filament_volume_map);
+    if (opt)
+        return opt->values;
+    return {};
+}
+
+void ConfigSync::write_volume_map_to_config(
+    Slic3r::DynamicPrintConfig& config,
+    const std::vector<int>& volume_map)
+{
+    auto* opt = config.option<Slic3r::ConfigOptionInts>(Keys::k_filament_volume_map, true);
+    if (opt)
+        opt->values = volume_map;
+}
+
 } // namespace Vortek

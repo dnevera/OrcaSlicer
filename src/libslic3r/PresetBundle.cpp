@@ -4210,8 +4210,14 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
 // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:3228
 DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optional<std::vector<int>> filament_maps, std::optional<std::vector<int>> filament_volume_maps) const
 {
-    // 1. Get base config from the original full_fff_config (uses project_config volume_maps).
-    DynamicPrintConfig out = this->full_fff_config(apply_extruder, filament_maps);
+    // 1. Get base config from the original full_fff_config.
+    // H2C: when plate-level volume_maps are provided, skip variant expansion in the base call —
+    // the base would use project_config volume_map (potentially stale). We re-apply expansion
+    // in step 2 below with the correct plate-level volume_map.
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp:3228 — BBS has a single function
+    // with integrated volume_map; our 2-step pattern requires this guard to avoid double expansion.
+    const bool skip_base_expansion = filament_volume_maps.has_value();
+    DynamicPrintConfig out = this->full_fff_config(skip_base_expansion ? false : apply_extruder, filament_maps);
 
     // 2. If plate-level volume_maps provided and this is H2C, override and re-apply Vortek hooks.
     if (filament_volume_maps.has_value() && Vortek::is_h2c_printer(out)) {

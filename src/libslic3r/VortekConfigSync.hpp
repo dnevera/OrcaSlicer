@@ -315,6 +315,30 @@ public:
     /// Convenience overload: defaults to sync_baseline attribute.
     static int sync_keys_between(const Slic3r::ConfigBase& src, Slic3r::ConfigBase& dst);
 
+    // ────────────────────── Volume Map Helpers (static) ──────────────────────
+
+    /// BBS pattern: Hybrid→0 (Std default), HighFlow→1, Standard→0.
+    /// Single source of truth for the nozzle-type → volume-map-value conversion.
+    /// Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp L24395 update_filament_volume_map
+    static int compute_selected_volume_type(Slic3r::NozzleVolumeType nvt);
+
+    /// Pure data transform: for each filament mapped to extruder_id+1,
+    /// set volume_map[i] = selected_volume_type. Returns modified copy + changed flag.
+    /// Does NOT touch GUI objects — operates on plain vectors.
+    static std::pair<std::vector<int>, bool> compute_volume_map_for_extruder(
+        const std::vector<int>& filament_map,
+        const std::vector<int>& current_volume_map,
+        int extruder_id,
+        int selected_volume_type);
+
+    /// Read filament_volume_map from a DynamicConfig. Returns empty if key missing.
+    static std::vector<int> read_volume_map_from_config(const Slic3r::DynamicConfig& config);
+
+    /// Write filament_volume_map to a DynamicPrintConfig (creates option if missing).
+    static void write_volume_map_to_config(
+        Slic3r::DynamicPrintConfig& config,
+        const std::vector<int>& volume_map);
+
 private:
     Slic3r::Print& m_print;
 

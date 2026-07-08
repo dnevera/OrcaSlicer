@@ -62,6 +62,8 @@ list(APPEND SLIC3R_GUI_SOURCES
     GUI/DeviceCore/VortekUtilBackend.cpp
     GUI/DeviceCore/VortekDeviceHooks.hpp
     GUI/DeviceCore/VortekDeviceHooks.cpp
+    GUI/DeviceCore/VortekVolumeMapSync.hpp
+    GUI/DeviceCore/VortekVolumeMapSync.cpp
     GUI/DeviceCore/VortekProtocolExtension.h
     GUI/DeviceCore/VortekProtocolExtension.cpp
 )

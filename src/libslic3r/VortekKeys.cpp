@@ -143,6 +143,8 @@ const std::vector<KeyDef>& registry() {
         // ═══════════════════════════════════════════════════════════════
         // Hardware
         // ═══════════════════════════════════════════════════════════════
+        {k_nozzle_volume_type,              O::BBS,    G::Hardware,
+            false, false, false, false, false},
         {k_extruder_max_nozzle_count,       O::Vortek, G::Hardware,
             false, false, false, false, false},
         {k_extruder_nozzle_stats,           O::Vortek, G::Hardware,

@@ -8,6 +8,7 @@
 #include "CapsuleButton.hpp"
 #include "MsgDialog.hpp"
 #include "slic3r/GUI/DeviceCore/VortekDeviceHooks.hpp"
+#include "slic3r/GUI/DeviceCore/VortekVolumeMapSync.hpp"
 
 namespace Slic3r { namespace GUI {
 
@@ -125,8 +126,8 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
 
         if (Vortek::is_h2c_printer(wxGetApp().preset_bundle)) {
             auto new_volume_map = map_dlg.get_filament_volume_maps();
-            bool volume_map_changed = Vortek::DeviceHooks::check_volume_maps_changed_hook(partplate_ref, wxGetApp().preset_bundle->project_config, new_volume_map);
-            Vortek::DeviceHooks::save_filament_volume_maps_hook(plater_ref, partplate_ref, sync_plate, is_slice_all, new_mode, new_volume_map);
+            bool volume_map_changed = Vortek::VolumeMapSync::check_volume_maps_changed_hook(partplate_ref, wxGetApp().preset_bundle->project_config, new_volume_map);
+            Vortek::VolumeMapSync::save_filament_volume_maps_hook(plater_ref, partplate_ref, sync_plate, is_slice_all, new_mode, new_volume_map);
             if (volume_map_changed) {
                 if (is_slice_all) {
                     auto plate_list = plater_ref->get_partplate_list().get_plate_list();
