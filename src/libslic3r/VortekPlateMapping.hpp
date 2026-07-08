@@ -94,10 +94,14 @@ public:
      *
      * @param plate_data  PlateData whose slice_filaments_info will be patched
      * @param filament_nozzle_map  Per-filament nozzle slot IDs (0=Left, 1-3=Right carousel)
+     * @param filament_volume_map  Per-filament resolved volume type (0=Standard, 1=HighFlow)
+     *                             Used to resolve Hybrid → concrete type for firmware.
+     *                             Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp L686-704
      */
     static void patch_slice_filament_nozzle_groups(
         Slic3r::PlateData* plate_data,
-        const std::vector<int>& filament_nozzle_map
+        const std::vector<int>& filament_nozzle_map,
+        const std::vector<int>& filament_volume_map
     );
 
     /**

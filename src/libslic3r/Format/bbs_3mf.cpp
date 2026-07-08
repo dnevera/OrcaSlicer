@@ -8347,7 +8347,24 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     diameter_stream << std::defaultfloat << get_nozzle_diameter(nozzle_group_id);
                     return diameter_stream.str();
                 };
-                auto get_nozzle_volume_type = [nozzle_volume_type_option](int nozzle_group_id) {
+                // H2C carousel slots (group_ids 0-6) exceed the 2-element
+                // nozzle_volume_type config array. Derive per-slot volume_type from
+                // the already-patched slice_filaments_info (which resolves Hybrid →
+                // concrete Standard/High Flow). Fall back to config for non-H2C.
+                // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp L8494-8499
+                //   (BBS uses nozzle_group_result->get_used_nozzles_in_extruder())
+                auto get_nozzle_volume_type = [plate_data, nozzle_volume_type_option](int nozzle_group_id) -> std::string {
+                    // First: try to find resolved volume_type from slice_filaments_info
+                    // (patched by Vortek::PlateMapping::patch_slice_filament_nozzle_groups)
+                    if (plate_data) {
+                        for (const auto& fi : plate_data->slice_filaments_info) {
+                            if (!fi.group_id.empty() && fi.group_id[0] == nozzle_group_id
+                                && !fi.nozzle_volume_type.empty()) {
+                                return fi.nozzle_volume_type;
+                            }
+                        }
+                    }
+                    // Fallback: config array (works for non-H2C / 2-extruder printers)
                     if (!nozzle_volume_type_option || nozzle_volume_type_option->values.empty())
                         return std::string();
                     int nozzle_volume_type = nozzle_volume_type_option->values.front();

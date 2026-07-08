@@ -163,7 +163,8 @@ void PlateMapping::sync_project_config_on_load(Slic3r::DynamicConfig& proj_cfg, 
 
 void PlateMapping::patch_slice_filament_nozzle_groups(
     Slic3r::PlateData* plate_data,
-    const std::vector<int>& filament_nozzle_map
+    const std::vector<int>& filament_nozzle_map,
+    const std::vector<int>& filament_volume_map
 )
 {
     // Called AFTER parse_filament_info() which populates slice_filaments_info but
@@ -173,17 +174,33 @@ void PlateMapping::patch_slice_filament_nozzle_groups(
     // BBS's FilamentInfo::group_id = nozzle slot ID (0=Left, 1-3=Right carousel)
     // This makes bbs_3mf.cpp write correct <filament group_id="N"> and
     // generates correct 4-nozzle <nozzle> list in slice_info.config.
+    //
+    // Also resolves per-filament nozzle_volume_type from filament_volume_map:
+    // BBS resolves Hybrid → concrete type (Standard/High Flow) via
+    // nozzle_group_result->get_nozzles_for_filament(). We use filament_volume_map
+    // which contains the same resolved values.
+    // Reference to BBS: BambuStudio/src/libslic3r/Format/bbs_3mf.cpp L686-704
     if (!plate_data || filament_nozzle_map.empty()) return;
 
     int patched = 0;
     for (auto& fi : plate_data->slice_filaments_info) {
         if (fi.id >= 0 && fi.id < (int)filament_nozzle_map.size()) {
             fi.group_id = {filament_nozzle_map[fi.id]};
+            // Resolve per-filament volume type from filament_volume_map.
+            // This ensures "Hybrid" is never written as per-filament volume_type —
+            // firmware expects concrete Standard or High Flow.
+            if (fi.id < (int)filament_volume_map.size()) {
+                int vt = filament_volume_map[fi.id];
+                if (vt >= 0 && vt <= Slic3r::nvtMaxNozzleVolumeType) {
+                    fi.nozzle_volume_type = Slic3r::get_nozzle_volume_type_string(
+                        static_cast<Slic3r::NozzleVolumeType>(vt));
+                }
+            }
             ++patched;
         }
     }
     VORTEK_LOG(warn, "patch_slice_filament_nozzle_groups: patched " << patched
-                     << " filaments with nozzle group_ids from filament_nozzle_map");
+                     << " filaments with nozzle group_ids and volume_types");
 }
 
 std::vector<int> PlateMapping::get_nozzle_map_for_export(const Slic3r::Print* print, const Slic3r::DynamicPrintConfig& plate_config)
