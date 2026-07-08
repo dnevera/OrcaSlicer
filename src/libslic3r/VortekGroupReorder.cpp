@@ -7,6 +7,125 @@
 
 namespace Vortek {
 
+// Helper: build nozzle_list from extruder_nozzle_stats
+// Shared by has_user_volume_map and auto-mode branches.
+// Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp nozzle_list construction
+static std::vector<Slic3r::MultiNozzleUtils::NozzleInfo> build_nozzle_list_from_stats(
+    const std::vector<std::map<Slic3r::NozzleVolumeType, int>>& nozzle_stats,
+    const Slic3r::DynamicPrintConfig& config)
+{
+    std::vector<Slic3r::MultiNozzleUtils::NozzleInfo> nozzle_list;
+
+    // Compute total right-extruder (carousel) nozzle count for unique group_id assignment.
+    // BBS uses IDs like [1,2,3,5,6] for right carousel — descending from total_count.
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode/ToolOrdering.cpp nozzle_list construction
+    int total_carousel_nozzles = 0;
+    for (size_t i = 1; i < nozzle_stats.size(); ++i) {
+        for (auto const& [vtype, count] : nozzle_stats[i]) {
+            total_carousel_nozzles += count;
+        }
+    }
+    int next_carousel_nozzle = total_carousel_nozzles;  // start from max, descend to 1
+
+    for (size_t i = 0; i < nozzle_stats.size(); ++i) {
+        auto slot_map = nozzle_stats[i];
+        for (auto const& [vtype, count] : slot_map) {
+            for (int c = 0; c < count; ++c) {
+                Slic3r::MultiNozzleUtils::NozzleInfo nz;
+                nz.extruder_id = (int)i;
+                nz.volume_type = vtype;
+                float dia = 0.4f;
+                if (config.has("nozzle_diameter")) {
+                    auto* opt = config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
+                    if (opt && nz.extruder_id < (int)opt->values.size())
+                        dia = (float)opt->values[nz.extruder_id];
+                }
+                nz.diameter = Slic3r::MultiNozzleUtils::format_diameter_to_str(dia);
+                if (nz.extruder_id == 0) {
+                    nz.group_id = 0;
+                } else {
+                    nz.group_id = next_carousel_nozzle--;
+                    if (next_carousel_nozzle < 1) next_carousel_nozzle = total_carousel_nozzles;
+                }
+                nozzle_list.push_back(nz);
+            }
+        }
+    }
+    return nozzle_list;
+}
+
+// Helper: volume_type-aware assignment of filaments to nozzle slots.
+// Pass 1: match extruder_id + volume_type (unique).
+// Pass 2: any unused slot on same extruder.
+// Pass 3: overflow — share slot matching volume_type.
+// Pass 4: last resort — any slot on same extruder.
+// Reference to BBS: BambuStudio/src/libslic3r/FilamentGroup.cpp:1723 (conceptually equivalent)
+static std::vector<int> assign_filaments_to_nozzles_volume_aware(
+    const std::vector<int>& filament_maps,
+    const std::vector<int>& volume_map,
+    const std::vector<Slic3r::MultiNozzleUtils::NozzleInfo>& nozzle_list)
+{
+    std::vector<int> filament_nozzle_idx_map(filament_maps.size(), -1);
+    std::vector<bool> used_nozzle(nozzle_list.size(), false);
+
+    for (size_t i = 0; i < filament_maps.size(); ++i) {
+        int target_ext = filament_maps[i] - 1;
+        int filament_vtype = (i < volume_map.size()) ? volume_map[i] : 0;
+        int assigned_idx = -1;
+
+        // Pass 1: match BOTH extruder_id AND volume_type
+        for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+            if (!used_nozzle[ni] &&
+                nozzle_list[ni].extruder_id == target_ext &&
+                nozzle_list[ni].volume_type == filament_vtype) {
+                assigned_idx = (int)ni;
+                used_nozzle[ni] = true;
+                break;
+            }
+        }
+
+        // Pass 2: any unused slot on same extruder
+        if (assigned_idx == -1) {
+            for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+                if (!used_nozzle[ni] && nozzle_list[ni].extruder_id == target_ext) {
+                    assigned_idx = (int)ni;
+                    used_nozzle[ni] = true;
+                    break;
+                }
+            }
+        }
+
+        // Pass 3: overflow — share slot matching volume_type
+        if (assigned_idx == -1) {
+            for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+                if (nozzle_list[ni].extruder_id == target_ext &&
+                    nozzle_list[ni].volume_type == filament_vtype) {
+                    assigned_idx = (int)ni;
+                    break;
+                }
+            }
+        }
+
+        // Pass 4: last resort — any slot on same extruder
+        if (assigned_idx == -1) {
+            for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
+                if (nozzle_list[ni].extruder_id == target_ext) {
+                    assigned_idx = (int)ni;
+                    break;
+                }
+            }
+        }
+
+        filament_nozzle_idx_map[i] = assigned_idx;
+        VORTEK_LOG(warn, "  filament[" << i << "] ext=" << target_ext
+            << " vtype=" << filament_vtype
+            << " -> nozzle_idx=" << assigned_idx
+            << " (nozzle_vtype=" << (assigned_idx >= 0 ? nozzle_list[assigned_idx].volume_type : -1) << ")");
+    }
+
+    return filament_nozzle_idx_map;
+}
+
 bool GroupReorder::handle_nozzle_manual_reorder(
     Slic3r::Print* print,
     const Slic3r::PrintConfig* print_config,
@@ -118,80 +237,29 @@ bool GroupReorder::ensure_nozzle_group_result(
             for (int v : vm_opt->values) if (v != 0) { has_user_volume_map = true; break; }
         }
         if (has_user_volume_map) {
-            // User explicitly assigned filament(s) to HF nozzle — preserve choice.
-            auto manual_filament_map = config.option<Slic3r::ConfigOptionInts>("filament_map")->values;
-            std::transform(manual_filament_map.begin(), manual_filament_map.end(), manual_filament_map.begin(), [](int v) { return v - 1; });
-            auto nozzle_map = config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_nozzle_map)->values;
-            VORTEK_LOG(warn, "ensure_nozzle_group_result: user volume_map set — using NozzleManual path (HF binding preserved)");
-            auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_config(
-                used_filaments,
-                manual_filament_map,
-                vm_opt->values,
-                nozzle_map,
-                nozzle_stats,
-                nozzle_dia
-            );
+            // User explicitly assigned filament(s) to HF nozzle.
+            // RECOMPUTE nozzle slot assignment with volume_type-aware matching.
+            // Reference to BBS: BambuStudio/src/libslic3r/FilamentGroup.cpp:1723
+            VORTEK_LOG(warn, "ensure_nozzle_group_result: user volume_map set — recomputing nozzle slots with volume_type matching");
+
+            auto nozzle_list = build_nozzle_list_from_stats(nozzle_stats, config);
+            auto filament_nozzle_idx_map = assign_filaments_to_nozzles_volume_aware(
+                filament_maps, vm_opt->values, nozzle_list);
+
+            auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_index_map(
+                filament_nozzle_idx_map, nozzle_list, used_filaments);
             if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
         }
         if (!has_user_volume_map) {
-        std::vector<Slic3r::MultiNozzleUtils::NozzleInfo> nozzle_list;
-        int next_carousel_nozzle = 4;
-        for (size_t i = 0; i < nozzle_stats.size(); ++i) {
-            auto slot_map = nozzle_stats[i];
-            for (auto const& [vtype, count] : slot_map) {
-                for (int c = 0; c < count; ++c) {
-                    Slic3r::MultiNozzleUtils::NozzleInfo nz;
-                    nz.extruder_id = (int)i;
-                    nz.volume_type = vtype;
+            // Auto-mode: no user volume_map, all filaments treated as Standard (vtype=0)
+            auto nozzle_list = build_nozzle_list_from_stats(nozzle_stats, config);
+            std::vector<int> zero_volume_map(filament_maps.size(), 0);
+            auto filament_nozzle_idx_map = assign_filaments_to_nozzles_volume_aware(
+                filament_maps, zero_volume_map, nozzle_list);
 
-                    float dia = 0.4f;
-                    if (config.has("nozzle_diameter")) {
-                        auto* opt = config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
-                        if (opt && nz.extruder_id < (int)opt->values.size()) {
-                            dia = (float)opt->values[nz.extruder_id];
-                        }
-                    }
-                    nz.diameter = Slic3r::MultiNozzleUtils::format_diameter_to_str(dia);
-
-                    if (nz.extruder_id == 0) {
-                        nz.group_id = 0;
-                    } else {
-                        nz.group_id = next_carousel_nozzle--;
-                        if (next_carousel_nozzle < 1) next_carousel_nozzle = 4;
-                    }
-                    nozzle_list.push_back(nz);
-                }
-            }
-        }
-
-        std::vector<int> filament_nozzle_idx_map(filament_maps.size(), -1);
-        std::vector<bool> used_nozzle(nozzle_list.size(), false);
-        for (size_t i = 0; i < filament_maps.size(); ++i) {
-            int target_ext = filament_maps[i] - 1;
-            int assigned_idx = -1;
-            for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
-                if (!used_nozzle[ni] && nozzle_list[ni].extruder_id == target_ext) {
-                    assigned_idx = (int)ni;
-                    used_nozzle[ni] = true;
-                    break;
-                }
-            }
-            if (assigned_idx == -1) {
-                for (size_t ni = 0; ni < nozzle_list.size(); ++ni) {
-                    if (nozzle_list[ni].extruder_id == target_ext) {
-                        assigned_idx = (int)ni;
-                        break;
-                    }
-                }
-            }
-            filament_nozzle_idx_map[i] = assigned_idx;
-            VORTEK_LOG(warn, "  filament[" << i << "] ext=" << target_ext
-                << " -> nozzle_idx=" << filament_nozzle_idx_map[i]);
-        }
-
-        auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_index_map(
-            filament_nozzle_idx_map, nozzle_list, used_filaments);
-        if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
+            auto res = Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult::create_from_index_map(
+                filament_nozzle_idx_map, nozzle_list, used_filaments);
+            if (res) nozzle_result = std::make_shared<Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult>(*res);
         } // end if (!has_user_volume_map)
     }
 

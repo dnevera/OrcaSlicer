@@ -611,20 +611,27 @@ void ExtruderNozzleStat::on_printer_model_change(PresetBundle* preset_bundle)
 
         // For H2C Hybrid: nvtHybrid is a UI-mode marker, NOT a physical nozzle slot type.
         // Machine sync (sync_machine_nozzle_inventory_to_preset) writes {Standard:N, HighFlow:M}.
-        // If we store {Hybrid: max_count} here, the diff with {Standard:N, HighFlow:M} causes a reslice
-        // on every printer connect — the representations are structurally different.
-        // Fix: store {Standard: max_count} as the offline default, matching BBS "Standard#4" pattern.
-        // Machine sync will overwrite with actual {Standard:4, HighFlow:1} on connect.
-        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L301 ("Standard#4" for H2C Hybrid)
-        NozzleVolumeType store_type = type;
+        // Offline fallback must match BBS default: Standard#4 | HighFlow#2 (total 6 slots).
+        // Previously we stored {Standard:6} which made all slots Standard-typed, causing
+        // HF filaments to get duplicate Standard slots instead of dedicated HF slots.
+        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp L301-316
         if (is_h2c && type == nvtHybrid) {
-            store_type = nvtStandard;  // H2C: offline default — machine sync overwrites with real counts
+            int total_count = max_nozzle_count->values[eid];
+            // H2C default: 2 HighFlow slots, rest Standard
+            int hf_count = 2;
+            int std_count = std::max(0, total_count - hf_count);
+            set_extruder_nozzle_count(eid, nvtStandard, std_count, true);
+            set_extruder_nozzle_count(eid, nvtHighFlow, hf_count, false);
+            VORTEK_LOG(warn, "on_printer_model_change: H2C Hybrid eid=" << eid
+                << " -> Standard#" << std_count << " | HighFlow#" << hf_count);
+            continue;
         }
+
         int count = max_nozzle_count->values[eid];
         if (is_h2c && eid == 0) {
             count = 1;  // Left fixed nozzle: only 1 slot
         }
-        set_extruder_nozzle_count(eid, store_type, count, true);
+        set_extruder_nozzle_count(eid, type, count, true);
 
     }
 }
@@ -646,14 +653,17 @@ void ExtruderNozzleStat::on_printer_model_change_cli(const std::vector<int>& noz
             type = NozzleVolumeType(nozzle_volume_type[eid]);
 
         // For H2C CLI mode: same logic as GUI on_printer_model_change.
-        // Left (eid=0) → count=1; Right carousel (eid>0) → keep max_nozzle_count.
-        // nvtHybrid → nvtStandard: carousel slots are Standard-type for nozzle matching.
+        // H2C Hybrid offline fallback: Standard#4 | HighFlow#2 (total 6 slots).
         // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L319
-        // count: Left (eid=0) fixed to 1 slot; Right carousel uses max_nozzle_count.
-        // nvtHybrid: do NOT collapse to nvtStandard. In CLI/offline mode without a live
-        // machine sync, nvtHybrid is kept as-is. With VORTEK_DEBUG_HF_NOZZLE_OVERRIDE the
-        // actual HighFlow counts will be injected during sync regardless.
-        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp ~L319
+        if (is_h2c && type == nvtHybrid) {
+            int total_count = max_nozzle_count[eid];
+            int hf_count = 2;
+            int std_count = std::max(0, total_count - hf_count);
+            set_extruder_nozzle_count(eid, nvtStandard, std_count, true);
+            set_extruder_nozzle_count(eid, nvtHighFlow, hf_count, false);
+            continue;
+        }
+
         int count = max_nozzle_count[eid];
         if (is_h2c && eid == 0) {
             count = 1;  // Left fixed nozzle: only 1 slot

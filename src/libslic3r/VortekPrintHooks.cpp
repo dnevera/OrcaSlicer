@@ -943,6 +943,26 @@ void PresetBundleHooks::load_nozzle_stats_from_config(
         boost::algorithm::split(extruder_nozzle_stats_str, config.get_printer_setting(initial_printer_profile_name, Vortek::Keys::k_extruder_nozzle_stats), boost::algorithm::is_any_of(","));
     }
     preset_bundle->extruder_nozzle_stat.set_raw_stat(Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(extruder_nozzle_stats_str));
+
+    // Migration: if loaded stats have total nozzle count exceeding physical max (6 for H2C),
+    // recalculate. E.g. legacy Standard#6|HighFlow#2 = 8 total > 6 max.
+    // Also catches Standard#6 (no HF) = 6 total which is wrong for Hybrid.
+    // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp L301
+    {
+        auto raw = preset_bundle->extruder_nozzle_stat.get_raw_stat();
+        if (raw.size() >= 2) {
+            int total = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, std::nullopt);
+            auto* max_nozzle_opt = preset_bundle->printers.get_selected_preset().config.option<Slic3r::ConfigOptionIntsNullable>("extruder_max_nozzle_count");
+            int max_count = (max_nozzle_opt && max_nozzle_opt->size() >= 2) ? max_nozzle_opt->values[1] : 6;
+            bool has_hf = raw[1].count(Slic3r::nvtHighFlow) > 0;
+            // Migrate if: total exceeds physical max, OR Hybrid mode without HF slots
+            if (total > max_count || (!has_hf && total > 1)) {
+                VORTEK_LOG(warn, "load_nozzle_stats_from_config: migrating legacy total="
+                    << total << " (max=" << max_count << ", has_hf=" << has_hf << ")");
+                preset_bundle->extruder_nozzle_stat.on_printer_model_change(preset_bundle);
+            }
+        }
+    }
 }
 
 void PresetBundleHooks::save_nozzle_stats_to_config(
@@ -973,6 +993,21 @@ void PresetBundleHooks::load_nozzle_stats_from_dynamic_config(
         std::vector<std::string> extruder_nozzle_stats = std::move(config.option<Slic3r::ConfigOptionStrings>(Vortek::Keys::k_extruder_nozzle_stats, true)->values);
         config.erase(Vortek::Keys::k_extruder_nozzle_stats);
         preset_bundle->extruder_nozzle_stat.set_raw_stat(Slic3r::MultiNozzleUtils::get_extruder_nozzle_stats(extruder_nozzle_stats));
+
+        // Migration: same as load_nozzle_stats_from_config — fix legacy stats
+        // Reference to BBS: BambuStudio/src/libslic3r/PresetBundle.cpp L301
+        auto raw = preset_bundle->extruder_nozzle_stat.get_raw_stat();
+        if (raw.size() >= 2) {
+            int total = preset_bundle->extruder_nozzle_stat.get_extruder_nozzle_count(1, std::nullopt);
+            auto* max_nozzle_opt = preset_bundle->printers.get_selected_preset().config.option<Slic3r::ConfigOptionIntsNullable>("extruder_max_nozzle_count");
+            int max_count = (max_nozzle_opt && max_nozzle_opt->size() >= 2) ? max_nozzle_opt->values[1] : 6;
+            bool has_hf = raw[1].count(Slic3r::nvtHighFlow) > 0;
+            if (total > max_count || (!has_hf && total > 1)) {
+                VORTEK_LOG(warn, "load_nozzle_stats_from_dynamic_config: migrating legacy total="
+                    << total << " (max=" << max_count << ", has_hf=" << has_hf << ")");
+                preset_bundle->extruder_nozzle_stat.on_printer_model_change(preset_bundle);
+            }
+        }
     }
 }
 

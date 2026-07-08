@@ -415,12 +415,13 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                            << " (preset=" << right_preset_diam << ", different diameter)");
                 continue;
             }
-            // Every nozzle is Standard-capable (HF nozzle can be used as Standard).
-            // HF nozzles are ALSO counted as HighFlow — counts overlap, not mutually exclusive.
-            // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp:1977 – Hybrid auto-detection
-            counts_right[Slic3r::nvtStandard]++;
+            // BBS counts nozzle types exclusively: HF nozzle → HighFlow only, not Standard.
+            // This gives Standard#4|HighFlow#2 (exclusive) instead of Standard#6|HighFlow#2 (overlapping).
+            // Reference to BBS: BambuStudio/src/slic3r/GUI/DeviceManager.cpp – exclusive nozzle counts
             if (dev_nozzle.m_nozzle_flow == Slic3r::NozzleFlowType::H_FLOW) {
                 counts_right[Slic3r::nvtHighFlow]++;
+            } else {
+                counts_right[Slic3r::nvtStandard]++;
             }
             VORTEK_LOG(debug, "sync_machine_nozzle_inventory_to_preset: found rack nozzle id=" 
                        << dev_nozzle.m_nozzle_id << ", diameter=" << dev_nozzle.m_diameter 
@@ -450,16 +451,18 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
                            << " (preset=" << preset_diam_for_eid << ", different diameter)");
                 continue;
             }
-            // Every nozzle is Standard-capable; HF nozzles also count as HighFlow.
+            // BBS counts nozzle types exclusively (same as rack loop above).
             if (dev_nozzle.m_nozzle_id == 0) {
-                counts_left[Slic3r::nvtStandard]++;
                 if (dev_nozzle.m_nozzle_flow == Slic3r::NozzleFlowType::H_FLOW) {
                     counts_left[Slic3r::nvtHighFlow]++;
+                } else {
+                    counts_left[Slic3r::nvtStandard]++;
                 }
             } else {
-                counts_right[Slic3r::nvtStandard]++;
                 if (dev_nozzle.m_nozzle_flow == Slic3r::NozzleFlowType::H_FLOW) {
                     counts_right[Slic3r::nvtHighFlow]++;
+                } else {
+                    counts_right[Slic3r::nvtStandard]++;
                 }
             }
             VORTEK_LOG(debug, "sync_machine_nozzle_inventory_to_preset: found active head nozzle id=" 
@@ -485,7 +488,8 @@ void sync_machine_nozzle_inventory_to_preset(const Slic3r::MachineObject* obj, S
 
         // Update extruder nozzle stats for each extruder
         for (int eid = 0; eid < num_extruders; ++eid) {
-            const auto& counts = (eid == 0) ? counts_left : counts_right;
+            auto counts = (eid == 0) ? counts_left : counts_right;
+            
             bool clear = true;
             bool added = false;
             for (const auto& pair : counts) {
