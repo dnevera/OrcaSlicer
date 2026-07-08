@@ -1406,58 +1406,13 @@ void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, in
         return;
     }
 
-    // nvtHybrid (2) means this extruder has mixed Std/HF carousel slots.
-    // Per-filament assignment is user-controlled via Filament Grouping dialog.
-    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp: update_filament_volume_map
-    //
-    // Logic:
-    //   • If plate already has a MIXED map (both 0 and 1 values for this extruder) →
-    //     preserve it (user's dialog choices, or previous Hybrid state). No override.
-    //   • If plate has a UNIFORM map (all-Std or all-HF, i.e. switching back from pure mode) →
-    //     reset to all-Std (BBS default for Hybrid start). User can reassign in dialog.
-    //   • If plate is EMPTY → nothing to do, Step 2b auto-assigns at slicing time.
-    if (volume_type == static_cast<int>(Slic3r::NozzleVolumeType::nvtHybrid)) {
-        auto& partplate_list = plater->get_partplate_list();
-        for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
-            auto plate = partplate_list.get_plate(idx);
-            if (!plate) continue;
-            auto filament_map = plate->get_filament_maps();
-            auto filament_volume_map = plate->get_filament_volume_maps();
-            if (filament_map.empty() || filament_volume_map.empty()) continue;
-            // Check if current volume map for this extruder is already mixed
-            bool has_std = false, has_hf = false;
-            for (size_t i = 0; i < filament_map.size(); ++i) {
-                if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
-                    if (filament_volume_map[i] == 0) has_std = true;
-                    if (filament_volume_map[i] == 1) has_hf  = true;
-                }
-            }
-            if (has_std && has_hf) {
-                // Already mixed → preserve user assignments
-                VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
-                           << " already has mixed Hybrid map → preserving");
-            } else {
-                // Uniform (all-Std or all-HF) → switching to Hybrid from pure mode.
-                // Reset to all-Std so dialog opens fresh. BBS pattern.
-                bool changed = false;
-                for (size_t i = 0; i < filament_map.size(); ++i) {
-                    if (filament_map[i] == extruder_id + 1 && i < filament_volume_map.size()) {
-                        if (filament_volume_map[i] != 0) { filament_volume_map[i] = 0; changed = true; }
-                    }
-                }
-                if (changed) {
-                    plate->set_filament_volume_maps(filament_volume_map);
-                    VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
-                               << " was uniform → reset to all-Std for Hybrid (BBS pattern)");
-                }
-            }
-        }
-        return;
-    }
-
-    // For non-Hybrid extruders (pure Standard or pure HighFlow): set all filaments
-    // on this extruder to the extruder's single volume type.
-    int selected_volume_type = volume_type;
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/Plater.cpp L24395-24415
+    // BBS pattern: Hybrid → reset to Std (user picks in Filament Grouping dialog),
+    // otherwise use volume_type directly:
+    //   Standard(0) → all filaments on this extruder get Std
+    //   HighFlow(1)  → all filaments on this extruder get HF
+    //   Hybrid(2)    → all filaments on this extruder get Std (default, user re-assigns)
+    int selected_volume_type = volume_type == static_cast<int>(Slic3r::NozzleVolumeType::nvtHybrid) ? 0 : volume_type;
 
     auto& partplate_list = plater->get_partplate_list();
     for (int idx = 0; idx < partplate_list.get_plate_count(); ++idx) {
@@ -1465,12 +1420,10 @@ void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, in
         if (!plate) continue;
         auto filament_map = plate->get_filament_maps();
         auto filament_volume_map = plate->get_filament_volume_maps();
-        
-        if (filament_map.empty()) continue;
+        if (filament_map.empty() || filament_volume_map.empty()) continue;
         if (filament_volume_map.size() < filament_map.size()) {
             filament_volume_map.resize(filament_map.size(), 0);
         }
-        
         bool changed = false;
         for (size_t i = 0; i < filament_map.size(); ++i) {
             if (filament_map[i] == extruder_id + 1) {
@@ -1482,6 +1435,10 @@ void update_filament_volume_map(Slic3r::GUI::Plater* plater, int extruder_id, in
         }
         if (changed) {
             plate->set_filament_volume_maps(filament_volume_map);
+            VORTEK_LOG(warn, "update_filament_volume_map: extruder=" << extruder_id
+                       << " volume_type=" << volume_type
+                       << " selected=" << selected_volume_type
+                       << " plate=" << idx << " updated");
         }
     }
 }
