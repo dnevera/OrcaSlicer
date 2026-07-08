@@ -1428,14 +1428,16 @@ bool SelectMachineDialog::is_nozzle_type_match(DevExtderSystem data, wxString& e
         if (target_machine_nozzle_id < flow_type_of_machine.size()) {
             if (flow_type_of_machine[target_machine_nozzle_id] != used_extruders_flow[it->first]) {
 
-                wxString pos;
-                if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID)
-                {
-                    pos = _L("left nozzle");
-                }
-                else if(target_machine_nozzle_id == MAIN_EXTRUDER_ID)
-                {
-                    pos = _L("right nozzle");
+                wxString pos = Vortek::DeviceHooks::get_nozzle_display_name_override(wxGetApp().preset_bundle, target_machine_nozzle_id);
+                if (pos.empty()) {
+                    if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID)
+                    {
+                        pos = _L("left nozzle");
+                    }
+                    else if(target_machine_nozzle_id == MAIN_EXTRUDER_ID)
+                    {
+                        pos = _L("right nozzle");
+                    }
                 }
                 // Vortek H2C override: use H2C-specific nozzle names
                 // Reference to BBS: BambuStudio/src/slic3r/GUI/SelectMachine.cpp

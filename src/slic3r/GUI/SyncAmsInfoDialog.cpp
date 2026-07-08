@@ -1582,12 +1582,14 @@ bool SyncAmsInfoDialog::is_nozzle_type_match(DevExtderSystem data, wxString &err
 
             if (target_machine_nozzle_id < flow_type_of_machine.size()) {
                 if (flow_type_of_machine[target_machine_nozzle_id] != used_extruders_flow[it->first]) {
-                    wxString pos;
-                    auto sai_nz_pt = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
-                    if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID) {
-                        pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
-                    } else if ((target_machine_nozzle_id == MAIN_EXTRUDER_ID)) {
-                        pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                    wxString pos = Vortek::DeviceHooks::get_nozzle_display_name_override(wxGetApp().preset_bundle, target_machine_nozzle_id);
+                    if (pos.empty()) {
+                        auto sai_nz_pt = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
+                        if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID) {
+                            pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                        } else if ((target_machine_nozzle_id == MAIN_EXTRUDER_ID)) {
+                            pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                        }
                     }
                     // Vortek H2C override: use H2C-specific nozzle names
                     // Reference to BBS: BambuStudio/src/slic3r/GUI/SelectMachine.cpp
