@@ -610,15 +610,29 @@ void PlateMapping::override_filament_variant_expansion(
             new Slic3r::ConfigOptionInts(plate_volume_map));
     }
 
-    // 2. Sync ALL filament_options_with_variant (BBS base layer: retract, thermal, flow, etc.)
+    // 2. Sync filament_options_with_variant (BBS base layer: retract, thermal, flow, etc.)
+    // ONLY when volume_map is unchanged. When volume_map changed (user drag in Manual mode
+    // or ToolOrdering recomputed in Auto), upstream expansion (L1178 PrintApply) already
+    // re-expanded per-filament speeds with the new volume_map. Syncing from m_full would
+    // overwrite correct HF speeds with old Std values.
+    bool volume_map_changed = false;
+    {
+        auto* opt_mfull = m_full.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
+        auto* opt_new = new_full_config.option<Slic3r::ConfigOptionInts>(Vortek::Keys::k_filament_volume_map);
+        if (opt_mfull && opt_new && opt_mfull->values != opt_new->values)
+            volume_map_changed = true;
+    }
+
     int variant_copied = 0;
-    for (const auto& key : Slic3r::filament_options_with_variant) {
-        const auto* src = m_full.option(key);
-        if (!src) continue;
-        auto* dst = new_full_config.option(key, true);
-        if (dst && *dst != *src) {
-            dst->set(src);
-            ++variant_copied;
+    if (!volume_map_changed) {
+        for (const auto& key : Slic3r::filament_options_with_variant) {
+            const auto* src = m_full.option(key);
+            if (!src) continue;
+            auto* dst = new_full_config.option(key, true);
+            if (dst && *dst != *src) {
+                dst->set(src);
+                ++variant_copied;
+            }
         }
     }
 
@@ -635,7 +649,8 @@ void PlateMapping::override_filament_variant_expansion(
 
     VORTEK_LOG(warn, "override_filament_variant_expansion: synced " << registry_copied << " registry + "
         << variant_copied << " variant keys from m_full_print_config → new_full_config"
-        << (is_manual ? " [Manual: plate volume_map preserved]" : " [Auto]"));
+        << (is_manual ? " [Manual: plate volume_map preserved]" : " [Auto]")
+        << (volume_map_changed ? " [volume_map CHANGED: variant sync skipped]" : ""));
 }
 
 } // namespace Vortek
