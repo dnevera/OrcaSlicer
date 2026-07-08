@@ -248,6 +248,9 @@ bool parse_hybrid_extruder_selection(
     int&                            out_extruder_id,
     Slic3r::NozzleVolumeType&       out_nozzle_type);
 
+std::vector<int> get_extruder_mapping(const Slic3r::PresetBundle* preset_bundle);
+bool bypass_nozzle_type_match(const Slic3r::PresetBundle* preset_bundle, int logical_extruder_id);
+wxString get_nozzle_display_name_override(const Slic3r::PresetBundle* preset_bundle, int target_machine_nozzle_id);
 
 } // namespace DeviceHooks
 } // namespace Vortek

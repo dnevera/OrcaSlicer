@@ -1396,8 +1396,27 @@ bool parse_hybrid_extruder_selection(
     return false;
 }
 
+std::vector<int> get_extruder_mapping(const Slic3r::PresetBundle* preset_bundle)
+{
+    if (preset_bundle && Vortek::is_h2c_printer(preset_bundle)) {
+        return {0, 1}; // Direct mapping for H2C
+    }
+    return {1, 0}; // Default reversed mapping
+}
 
+bool bypass_nozzle_type_match(const Slic3r::PresetBundle* preset_bundle, int logical_extruder_id)
+{
+    // Bypasses matching for H2C's right carousel extruder (index 1)
+    return preset_bundle && Vortek::is_h2c_printer(preset_bundle) && logical_extruder_id == 1;
+}
 
+wxString get_nozzle_display_name_override(const Slic3r::PresetBundle* preset_bundle, int target_machine_nozzle_id)
+{
+    if (preset_bundle && Vortek::is_h2c_printer(preset_bundle)) {
+        return (target_machine_nozzle_id == 0) ? _L("left nozzle") : _L("right nozzle");
+    }
+    return wxEmptyString;
+}
 
 } // namespace DeviceHooks
 } // namespace Vortek

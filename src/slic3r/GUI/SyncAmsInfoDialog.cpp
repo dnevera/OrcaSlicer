@@ -28,6 +28,7 @@
 #include "DeviceCore/DevManager.h"
 #include "DeviceCore/DevMapping.h"
 #include "DeviceCore/DevStorage.h"
+#include "DeviceCore/VortekDeviceHooks.hpp"
 
 using namespace Slic3r;
 using namespace Slic3r::GUI;
@@ -1553,7 +1554,7 @@ bool SyncAmsInfoDialog::is_nozzle_type_match(DevExtderSystem data, wxString &err
         }
     }
 
-    vector<int> map_extruders = {1, 0};
+    std::vector<int> map_extruders = Vortek::DeviceHooks::get_extruder_mapping(wxGetApp().preset_bundle);
 
     // The default two extruders are left, right, but the order of the extruders on the machine is right, left.
     std::vector<std::string> flow_type_of_machine;
@@ -1570,14 +1571,20 @@ bool SyncAmsInfoDialog::is_nozzle_type_match(DevExtderSystem data, wxString &err
         if (it->first >= 0 && it->first < map_extruders.size()) {
             int target_machine_nozzle_id = map_extruders[it->first];
 
+            if (Vortek::DeviceHooks::bypass_nozzle_type_match(wxGetApp().preset_bundle, it->first)) {
+                continue;
+            }
+
             if (target_machine_nozzle_id < flow_type_of_machine.size()) {
                 if (flow_type_of_machine[target_machine_nozzle_id] != used_extruders_flow[it->first]) {
-                    wxString pos;
-                    auto sai_nz_pt = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
-                    if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID) {
-                        pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
-                    } else if ((target_machine_nozzle_id == MAIN_EXTRUDER_ID)) {
-                        pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                    wxString pos = Vortek::DeviceHooks::get_nozzle_display_name_override(wxGetApp().preset_bundle, target_machine_nozzle_id);
+                    if (pos.empty()) {
+                        auto sai_nz_pt = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
+                        if (target_machine_nozzle_id == DEPUTY_EXTRUDER_ID) {
+                            pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                        } else if ((target_machine_nozzle_id == MAIN_EXTRUDER_ID)) {
+                            pos = _L(DevPrinterConfigUtil::get_toolhead_display_name(sai_nz_pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::LowerCase));
+                        }
                     }
 
                     error_message = wxString::Format(_L("The nozzle flow setting of %s(%s) doesn't match with the slicing file(%s). "
