@@ -290,15 +290,10 @@ void PrintHooks::update_filament_maps_to_config(
                 // Manual mode: ALWAYS respect user-set volume_map, even if all-zeros.
                 final_volume_maps = existing_opt->values;
                 VORTEK_LOG(warn, "update_filament_maps_to_config: Manual mode — using user-set volume_map (no auto-compute)");
-            } else {
-                // Auto mode: only recover if user has explicitly assigned some HF.
-                bool has_hf = false;
-                for (int v : existing_opt->values) if (v != 0) { has_hf = true; break; }
-                if (has_hf) {
-                    final_volume_maps = existing_opt->values;
-                    VORTEK_LOG(warn, "update_filament_maps_to_config: using user-set volume_map from m_full_print_config (manual HF binding preserved)");
-                }
             }
+            // Auto mode: always recompute volume_map fresh from extruder_nozzle_stats.
+            // Previously this branch recovered cached volume_map when has_hf was true,
+            // which prevented recalculation when filament_maps changed → stale values.
         }
     }
 
