@@ -192,6 +192,21 @@ std::optional<LayeredNozzleGroupResult> LayeredNozzleGroupResult::create_from_co
             break;
         }
 
+        // Second pass: nozzle sharing (purge) — reuse an already-used nozzle of the same type.
+        // This allows more filaments than physical nozzle slots (e.g. 3 HF filaments on 2 HF nozzles).
+        // The printer will purge between filament switches on the shared nozzle.
+        if (output_nozzle_idx == -1) {
+            for (size_t nozzle_idx = 0; nozzle_idx < nozzle_list.size(); ++nozzle_idx) {
+                auto& nozzle_info = nozzle_list[nozzle_idx];
+                if (!(nozzle_info.extruder_id == req_extruder && nozzle_info.volume_type == req_type)) continue;
+                output_nozzle_idx = static_cast<int>(nozzle_idx);
+                input_nozzle_id_to_output[input_nozzle_idx] = output_nozzle_idx;
+                VORTEK_LOG(warn, "  filament[" << filament_idx << "] SHARING nozzle " << output_nozzle_idx
+                    << " (all " << (int)req_type << "-type nozzles occupied, purge required)");
+                break;
+            }
+        }
+
         VORTEK_LOG(warn, "  filament[" << filament_idx << "] req_ext=" << req_extruder
             << " req_type=" << (int)req_type << " input_nz=" << input_nozzle_idx
             << " -> output_nz=" << output_nozzle_idx);
