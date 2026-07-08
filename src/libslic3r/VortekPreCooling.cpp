@@ -145,10 +145,16 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
 
             if (ext_is_carousel) {
                 if (iter->last_filament_id < 0) {
-                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: SKIP carousel ext " << extruder_id
-                        << " sentinel block (last_fil=-1) — nothing to cooldown");
-                    continue;
-                }
+                    // Sentinel block: no previous filament to cool.
+                    // Fall through to the general path (below) which already handles
+                    // sentinel correctly via suppress_cooling_emission = (last_filament_id == -1).
+                    // The general path generates time-based preheat for next_filament_id
+                    // while suppressing cooling emission.
+                    // Reference to BBS: this was the original working path before carousel split.
+                    VORTEK_LOG(warning, "process_pre_cooling_and_heating: carousel ext " << extruder_id
+                        << " sentinel (last_fil=-1) — fall through to general path for preheat");
+                    // DO NOT continue; fall through to L248+
+                } else {
                 // Carousel park/standby target temperature — 3-level hierarchy (no hardcoded constants):
                 //   1. filament_pre_cooling_temperature_nc > 0  →  NC-specific park temp (carousel slot idle)
                 //   2. idle_temperature > 0                     →  generic standby configured in preset
@@ -217,6 +223,7 @@ void PreCooling::process_pre_cooling_and_heating(InsertedLinesMap& inserted_oper
                                                   apply_pre_cooling, blk_do_preheat, false);
                 }
                 continue;
+                } // end else (non-sentinel carousel)
             }
 
             bool suppress_cooling_emission = (iter->last_filament_id == -1);
