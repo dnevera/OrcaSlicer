@@ -1397,7 +1397,11 @@ bool SelectMachineDialog::is_nozzle_type_match(DevExtderSystem data, wxString& e
     }
 
     vector<int> map_extruders = {1, 0};
-
+    // Vortek H2C override: direct mapping for carousel (no reversal)
+    // Reference to BBS: BambuStudio/src/slic3r/GUI/SelectMachine.cpp (is_nozzle_type_match)
+    if (Vortek::is_h2c_printer(wxGetApp().preset_bundle)) {
+        map_extruders = {0, 1};
+    }
 
     // The default two extruders are left, right, but the order of the extruders on the machine is right, left.
     std::vector<std::string> flow_type_of_machine;
@@ -1417,6 +1421,10 @@ bool SelectMachineDialog::is_nozzle_type_match(DevExtderSystem data, wxString& e
     for (std::map<int, std::string>::iterator it = used_extruders_flow.begin(); it!= used_extruders_flow.end(); it++) {
         int target_machine_nozzle_id = map_extruders[it->first];
 
+        if (Vortek::DeviceHooks::bypass_nozzle_type_match(wxGetApp().preset_bundle, it->first)) {
+            continue;
+        }
+
         if (target_machine_nozzle_id < flow_type_of_machine.size()) {
             if (flow_type_of_machine[target_machine_nozzle_id] != used_extruders_flow[it->first]) {
 
@@ -1428,6 +1436,12 @@ bool SelectMachineDialog::is_nozzle_type_match(DevExtderSystem data, wxString& e
                 else if(target_machine_nozzle_id == MAIN_EXTRUDER_ID)
                 {
                     pos = _L("right nozzle");
+                }
+                // Vortek H2C override: use H2C-specific nozzle names
+                // Reference to BBS: BambuStudio/src/slic3r/GUI/SelectMachine.cpp
+                {
+                    wxString vortek_pos = Vortek::DeviceHooks::get_nozzle_display_name_override(wxGetApp().preset_bundle, target_machine_nozzle_id);
+                    if (!vortek_pos.empty()) pos = vortek_pos;
                 }
 
                 error_message = wxString::Format(_L("The nozzle flow setting of %s(%s) doesn't match with the slicing file(%s). "
