@@ -61,7 +61,8 @@ REPORTS_DIR = "/Users/denn/Develop/3dprint/dehancer lab/H2C_v2/mp_reports"
 def escape_markdown_table(val):
     if val is None:
         return "None"
-    return str(val).replace("|", " &#124; ")
+    # Replace pipe with unicode vertical bar to avoid breaking markdown table columns
+    return str(val).replace("|", " ⎮ ")
 
 def find_file(filename):
     if os.path.isabs(filename):
@@ -395,11 +396,30 @@ def analyze_critical_discrepancies(f1_meta, f2_meta, f1_settings, f2_settings, f
     fnm2 = clean_map(f2_settings.get("filament_nozzle_map"))
     
     if fnm1:
-        invalid = [x for x in fnm1 if x < 0 or x > 5]
+        # Compute max valid nozzle slot from extruder_nozzle_stats
+        # Format: ['Standard#1', 'Standard#4|High Flow#2'] → total = 1+4+2 = 7, max_slot = 6
+        max_nozzle_slot = 5  # default fallback
+        ens = f1_settings.get("extruder_nozzle_stats") or f2_settings.get("extruder_nozzle_stats")
+        if ens:
+            if isinstance(ens, str):
+                ens = ens.split("','")
+            total_nozzles = 0
+            for entry in ens:
+                entry = entry.strip().strip("'\"[] ")
+                for part in entry.split("|"):
+                    part = part.strip()
+                    if "#" in part:
+                        try:
+                            total_nozzles += int(part.split("#")[1])
+                        except (ValueError, IndexError):
+                            pass
+            if total_nozzles > 0:
+                max_nozzle_slot = total_nozzles - 1
+        invalid = [x for x in fnm1 if x < 0 or x > max_nozzle_slot]
         if invalid:
             discrepancies.append({
                 "level": "CRITICAL ERROR",
-                "message": f"{slicer1} `filament_nozzle_map` contains invalid nozzle slots {invalid} (out of H2C carousel limits 0..5). This breaks physical switching."
+                "message": f"{slicer1} `filament_nozzle_map` contains invalid nozzle slots {invalid} (out of H2C nozzle limits 0..{max_nozzle_slot}). This breaks physical switching."
             })
             
     # 2. Nozzle group collisions (multiple active filaments on one slot)
