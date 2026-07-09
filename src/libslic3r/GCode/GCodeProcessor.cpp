@@ -596,6 +596,16 @@ void GCodeProcessor::TimeMachine::calculate_time(GCodeProcessorResult& result, P
                 leftover += additional_buffer[i].second;
             time += double(leftover);
             gcode_time.cache += leftover;
+            // Vortek fix: also attribute leftover to the last g1_times_cache entry
+            // so M73 progress markers properly reflect accumulated toolchange time.
+            // Without this, leftover is added to machine.time but NOT to
+            // g1_times_cache, causing M73 P% to jump from ~78% directly to 100%
+            // at end-of-file (phantom tail on timeline).
+            // Reference to BBS: BambuStudio/src/libslic3r/GCode/GCodeProcessor.cpp
+            // drops the remainder entirely; we preserve it in total but also
+            // propagate to g1_times_cache for correct M73 progress reporting.
+            if (!g1_times_cache.empty())
+                g1_times_cache.back().elapsed_time = float(time);
         } else {
             m_additional_time_buffer.insert(m_additional_time_buffer.end(),
                                             additional_buffer.begin() + additional_buffer_idx,
