@@ -3205,7 +3205,12 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     }
 
     // Orca: when air filtration is supported, check if it needs to be activated during printing and set the exhaust fan speed accordingly
-    if (m_config.support_air_filtration.value) {
+    // Vortek H2C: H2C reports support_cooling_filter (not support_air_filtration) but still drives the exhaust fan via
+    // activate_air_filtration; force-enable for H2C to match BambuStudio.
+    // Ported from: galantsev/add_h2c_v2@88f24eb43c (feat(H2C): surface air filtration + aux-fan first-layer controls)
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp - air_filtration_during_print block
+    const bool h2c_force_air_filt = ::Vortek::is_h2c_printer(print.config());
+    if (m_config.support_air_filtration.value || h2c_force_air_filt) {
         bool activate_air_filtration_during_print = false;
         int  during_print_exhaust_fan_speed = 0;
 
@@ -3525,7 +3530,10 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         file.write(m_writer.set_chamber_temperature(0, false));  //close chamber_temperature
 
     // Orca: when air filtration is supported, check if it needs to be activated after print completion and set the exhaust fan speed accordingly
-    if (m_config.support_air_filtration.value) {
+    // Vortek H2C: force-enable for H2C (support_cooling_filter) to match BambuStudio.
+    // Ported from: galantsev/add_h2c_v2@88f24eb43c (feat(H2C): surface air filtration + aux-fan first-layer controls)
+    // Reference to BBS: BambuStudio/src/libslic3r/GCode.cpp - air_filtration_on_completion block
+    if (m_config.support_air_filtration.value || ::Vortek::is_h2c_printer(print.config())) {
         bool activate_air_filtration_on_completion = false;
         int complete_print_exhaust_fan_speed = 0;
 

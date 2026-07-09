@@ -4425,7 +4425,30 @@ void TabFilament::build()
         optgroup->append_single_option_line("ironing_fan_speed", "material_cooling#ironing-fan-speed"); // ORCA: Add support for ironing fan speed control
 
         optgroup = page->new_optgroup(L("Auxiliary part cooling fan"), L"param_cooling_aux_fan");
-        optgroup->append_single_option_line("additional_cooling_fan_speed", "material_cooling#auxiliary-part-cooling-fan");
+        // Vortek H2C: expose the first-layer/ramp-up auxiliary fan controls (ported from BambuStudio).
+        // These were already defined and placeholder-exposed but never surfaced in the UI.
+        // Ported from: galantsev/add_h2c_v2@88f24eb43c (feat(H2C): surface air filtration + aux-fan first-layer controls)
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp - aux_fan first-layer controls
+        line = {L("Initial layer fan"), L("Set the auxiliary fan speed for the first few layers")};
+        line.label_path = "material_cooling#auxiliary-part-cooling-fan";
+        line.append_option(optgroup->get_option("close_additional_fan_first_x_layers"));
+        line.append_option(optgroup->get_option("first_x_layer_fan_speed"));
+        optgroup->append_line(line);
+
+        line = {L("Linear ramp up"),
+                L("Auxiliary fan speed will linearly increase from the initial layer speed "
+                  "to the target speed over the specified number of layers")};
+        line.label_path = "material_cooling#auxiliary-part-cooling-fan";
+        {
+            auto opt_layer = optgroup->get_option("additional_fan_full_speed_layer");
+            opt_layer.opt.label = L("At layer");
+            opt_layer.opt.sidetext = L("layers");
+            line.append_option(opt_layer);
+            auto opt_speed = optgroup->get_option("additional_cooling_fan_speed");
+            opt_speed.opt.label = L("ramp up to");
+            line.append_option(opt_speed);
+        }
+        optgroup->append_line(line);
 
         optgroup = page->new_optgroup(L("Exhaust fan"),L"param_cooling_exhaust");
 
@@ -4643,9 +4666,20 @@ void TabFilament::toggle_options()
             }
         }
 
-        toggle_line("additional_cooling_fan_speed", printer_cfg.opt_bool("auxiliary_fan"));
+        {
+            bool has_aux_fan = printer_cfg.opt_bool("auxiliary_fan");
+            for (auto el : {"additional_cooling_fan_speed", "close_additional_fan_first_x_layers",
+                            "first_x_layer_fan_speed", "additional_fan_full_speed_layer"})
+                toggle_line(el, has_aux_fan);
+        }
 
         bool support_air_filtration = printer_cfg.opt_bool("support_air_filtration");
+        // Vortek H2C: H2C reports support_cooling_filter instead of support_air_filtration; force-enable the
+        // air-filtration UI for H2C to match BambuStudio (which name-forces on printer_model "H2C").
+        // Ported from: galantsev/add_h2c_v2@88f24eb43c (feat(H2C): surface air filtration + aux-fan first-layer controls)
+        // Reference to BBS: BambuStudio/src/slic3r/GUI/Tab.cpp - toggle_options air_filtration
+        if (printer_cfg.opt_string("printer_model").find("H2C") != std::string::npos)
+            support_air_filtration = true;
         for (auto el : {"activate_air_filtration", "during_print_exhaust_fan_speed", "complete_print_exhaust_fan_speed"})
             toggle_line(el, support_air_filtration);
 
