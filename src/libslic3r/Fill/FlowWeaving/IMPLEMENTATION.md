@@ -1,398 +1,353 @@
-# Flow Weaving — Implementation & Research Log
+# FlowWeaving — Technical Implementation
 
-> Документ обновлён: 2026-06-10  
-> Ветка: `flow_weaving_infill`  
-> Последний коммит: `186d9ea857`
+## 1. File Structure
 
----
-
-## 1. Концепция
-
-**Flow Weaving** — infill-паттерн для FDM, создающий **межслойное механическое зацепление**
-за счёт одновременной синусоидальной модуляции в двух осях:
-
-- **XY ось**: модуляция ширины экструзии — чередование широких и узких сегментов
-- **Z ось**: модуляция высоты — нозл двигается синусоидально вверх-вниз
-
-Соседние слои используют противоположную фазу (0 vs π): где слой N широкий+высокий,
-слой N+1 узкий+низкий. Широкие сегменты одного слоя **обхватывают** узкие соседнего —
-эффект типа "ласточкин хвост".
-
-### Теоретическое улучшение прочности
-
-По литературе (Coffigniez et al. 2021, Kubalak et al. 2019, Luo et al. 2020):
-- Z-interlocking: **+15–40%** прочности на разрыв по Z
-- Модуляция ширины: **+5–10%** от увеличения площади контакта
-- Комбинированно: ожидаемое **+20–50%** улучшения межслойного сцепления
-
----
-
-## 2. Архитектура (текущее состояние)
-
-### Двухфазная модуляция
+All FlowWeaving logic is self-contained in `src/libslic3r/Fill/FlowWeaving/`:
 
 ```
-Phase 1 — Fill Generation (FillFlowWeaving.cpp)
-────────────────────────────────────────────────
-• Генерирует базовые рекрилинейные линии (100% density)
-• Делит каждую линию на sub-segments (~period/8)
-• Модулирует ШИРИНУ per sub-segment:
-    width = base_w × (1 + amplitude × sin(2π×pos/period + phase))
-• safe_zone gating: точки вне fw_safe_expolygons → nominal width
-
-Phase 2 — G-code Generation (GCode.cpp)  ← ТЕКУЩАЯ РЕАЛИЗАЦИЯ
-────────────────────────────────────────
-• Для каждой точки пути вычисляет Z:
-    z = nominal_z + effective_amplitude × sin(phase_idx)
-• Применяет fade envelope (FlowWeavingFadeEnvelope)
-• Применяет XY-aware Z clamp (FlowWeavingZClamp)
-• Выдаёт G1 X Y Z E (3-axis move)
+Fill/FlowWeaving/
+├── README.md                  — overview and usage
+├── CONCEPT.md                 — research, hypotheses, future plans
+├── IMPLEMENTATION.md          — this file
+├── FillFlowWeaving.hpp        — class declaration
+├── FillFlowWeaving.cpp        — main algorithm
+├── FlowWeavingZModulator.hpp  — wave function abstraction (header-only)
+├── FlowWeavingContext.hpp     — parameter context
+├── FlowWeavingFadeEnvelope.hpp — wall-taper logic
+└── FlowWeavingZClamp.hpp      — Z safety clamp helpers
 ```
 
-### Параметры конфигурации
+**Changes outside this directory** (all minimal and justified):
 
-| Параметр | Ключ | Default | Описание |
-|----------|------|---------|----------|
-| XY амплитуда | `flow_weaving_xy_amplitude` | 15% | Модуляция ширины в % |
-| Z амплитуда | `flow_weaving_z_amplitude` | 500% | Модуляция Z в % от layer height |
-| Период | `flow_weaving_period` | 0.4mm | Длина волны (= диаметр нозла) |
-| Z fade слои | `flow_weaving_z_fade_layers` | 3 | Слоёв для затухания у границ |
-| Z tolerance | `flow_weaving_z_flow_tolerance` | 1 | Tolerance для Z clamp |
-| Overlap degree | `flow_weaving_overlap_degree` | 0.2 | Асимметрия вниз (давление на предыдущий слой) |
+| File | Change | Reason |
+|---|---|---|
+| `Fill/FillBase.hpp` | + `infill_layers_above` field | top-taper data propagation |
+| `Fill/Fill.cpp` | + counter in `make_fills()` | populate `infill_layers_above` |
+| `libslic3r/PrintConfig.hpp` | + 7 parameters declared | config system |
+| `libslic3r/PrintConfig.cpp` | + 7 parameter definitions | label/tooltip/range/default |
+| `libslic3r/Preset.cpp` | + 7 keys in `s_Preset_print_options` | preset save/load |
+| `GUI/Tab.cpp` | + 7 `append_single_option_line` | UI panel |
+| `GUI/ConfigManipulation.cpp` | + in 2 toggle loops | show/hide when FlowWeaving selected |
+| `GUI/GUI_Factories.cpp` | + in `PART_CATEGORY_SETTINGS` | modifier object access |
 
 ---
 
-## 3. Система безопасности (четырёхуровневая)
+## 2. Core Algorithm: FillFlowWeaving::fill_surface_extrusion()
 
-### Уровень 1 — Safe Zone (geometry-based)
+### 2.1 Entry and Setup
 
-Вычисляется в `Fill.cpp` при `Layer::make_fills()`:
+```
+fill_surface_extrusion(surface, params, out)
+  1. Extract parameters from params.config:
+     - z_amp_frac = flow_weaving_z_amplitude / 100
+     - xy_amp_frac = flow_weaving_xy_amplitude / 100
+     - xy_path_amp_mm = flow_weaving_xy_path_amplitude
+     - period_mm = flow_weaving_period
+     - phase_offset = flow_weaving_phase_offset
+     - z_overlap_pct = flow_weaving_z_overlap
+     - top_taper_n = flow_weaving_top_taper_layers
 
+  2. Call parent FillRectilinear::fill_surface() to get flat polylines
+
+  3. Compute layer-level phase:
+     same_dir_idx = layer_id / 2
+     layer_base_phase = (layer_id % 2 == 0 ? 0 : π)
+                      + same_dir_idx × phase_offset × 2π
+
+  4. Compute global_perp: direction perpendicular to fill angle
+     (for XY lateral displacement)
+
+  5. Build cross-layer safe zone:
+     safe_zone = intersect(no_overlap_expolygons, no_overlap_above, no_overlap_below)
+```
+
+### 2.2 Per-Polyline Processing
+
+```
+for each polyline in polylines:
+  phase_rad = layer_base_phase + (poly_idx % 2 == 1 ? π : 0)
+  // ↑ odd lines are antiphase to even lines within same layer
+
+  measure total_len_mm (for wall taper)
+
+  pos_mm = 0  // accumulated position along polyline
+
+  for each segment [pa, pb]:
+    for each sub-step (n_steps = ceil(seg_len / step_mm)):
+
+      compute t_mod_{start,end,mid} = sin(2π × pos / period + phase_rad)
+      compute taper_val = smoothstep from wall edges
+      compute gate = 1 if mid-point is in safe_zone, else 0
+
+      // ── Z modulation ──
+      z_start = z_amp_frac × layer_h × t_mod_start × taper_val × gate
+      z_end   = z_amp_frac × layer_h × t_mod_end   × taper_val × gate
+
+      // Lower bound safety:
+      overlap_limit  = -(layer_h × z_overlap_pct / 100)
+      absolute_floor = -(this->z - first_layer_h)
+      min_z_diff = max(overlap_limit, absolute_floor)
+      z_start = max(z_start, min_z_diff)
+      z_end   = max(z_end,   min_z_diff)
+
+      // Upper taper near top surface:
+      x = min(infill_layers_above / top_taper_n, 1.0)
+      upper_taper = x² × (3 - 2x)   // smoothstep
+      max_z_up = z_amp_frac × layer_h × upper_taper
+      z_start = min(z_start, max_z_up)
+      z_end   = min(z_end,   max_z_up)
+
+      // ── XY modulation ──
+      xy_off = lateral_amp_mm × t_mod × taper_val
+      // Shift points perpendicular to travel via global_perp
+
+      // ── Width/flow modulation ──
+      width_delta = xy_amp_frac × flow_width × t_mod_mid × taper_val × gate
+      effective_width = clamp(flow_width + width_delta, 0.25×flow_width, nozzle_d)
+      sub_mm3 = flow_mm3_per_mm × (effective_width / flow_width)
+
+      // ── Emit sub-segment ──
+      base_path = ExtrusionPath(role, sub_mm3, flow_width, flow_height)
+      contoured = ExtrusionPathContoured(base_path, poly3_with_z, z_contoured=true)
+      // collect into ExtrusionMultiPath
+```
+
+### 2.3 Output Collection
+
+Sub-segments for one polyline → `ExtrusionMultiPath` → pushed to `ExtrusionEntityCollection` → added to `out`.
+
+GCode.cpp receives standard `z_contoured` paths and emits `G1 X Y Z E` with automatic E-compensation via:
 ```cpp
-// Пересечение fill_no_overlap_expolygons всех слоёв в Z-диапазоне модуляции
-fw_safe_expolygons = current_layer.fill_no_overlap_expolygons;
-for (Layer* adj : all_layers_in_range(z - z_deflection, z + z_deflection)) {
-    fw_safe_expolygons = intersection(fw_safe_expolygons, adj.fill_no_overlap_expolygons);
-}
-```
-
-Результат: 2D-зона где нозл **гарантированно** внутри стен на КАЖДОМ посещаемом Z-уровне.
-
-Хранится в `FillBase::fw_safe_expolygons` — поле добавлено нами в базовый класс Fill.
-
-**Использование в XY (FillFlowWeaving.cpp):**
-```cpp
-Point midpt = sub_segment_midpoint;
-bool inside_safe = any(ep.contains(midpt) for ep in fw_safe_expolygons);
-taper = inside_safe ? 1.0 : 0.0;
-// width = base_w × (1 + xy_amplitude × taper × sin(θ))
-```
-
-### Уровень 2 — Z Clamp (FlowWeavingZClamp)
-
-XY-aware проверка: находится ли точка внутри shell-полигонов — если нет, Z зажимается
-к nominal. Реализован в `FlowWeavingZClamp.hpp`.
-
-### Уровень 3 — Fade Envelope (FlowWeavingFadeEnvelope)
-
-Per-point walk по соседним слоям для вычисления fade-коэффициента:
-
-```
-n_above = слоёв выше где точка в stInternal (до первого stInternalSolid/shell)
-n_below = слоёв ниже аналогично
-layers_from_edge = min(n_above, n_below)
-t = min(layers_from_edge, fade_n) / fade_n
-fade = t² × (3 - 2t)  // smoothstep
-effective_amplitude = amplitude × fade
-```
-
-Корректно обрабатывает наклонные поверхности (разный fade для разных XY-точек слоя)
-и мостовые полы (stInternalBridge = стоп).
-
-### Уровень 4 — Hard Clamp
-
-`z ≥ 0.05mm`, `z ≤ ceiling_z`, `z ≥ floor_z`. Абсолютный страховочный net.
-
----
-
-## 4. Файловая структура
-
-```
-src/libslic3r/
-├── Fill/
-│   ├── FillBase.hpp                — добавлено поле fw_safe_expolygons
-│   ├── Fill.cpp                    — вычисление fw_safe_expolygons в make_fills()
-│   └── FlowWeaving/
-│       ├── CONCEPT.md              — концепция и референсы
-│       ├── IMPLEMENTATION.md       — этот файл
-│       ├── README.md               — быстрый справочник
-│       ├── FillFlowWeaving.hpp     — декларация класса
-│       ├── FillFlowWeaving.cpp     — XY модуляция + safe zone gating
-│       ├── FlowWeavingZModulator.hpp   — Z синусоида + overlap_degree
-│       ├── FlowWeavingFadeEnvelope.hpp — per-point fade compute
-│       ├── FlowWeavingZClamp.hpp       — XY-aware Z clamping
-│       ├── FlowWeavingContext.hpp      — debug diagnostics struct
-│       └── FlowWeavingGCodeState.hpp   — aggregator для GCode.hpp
-├── GCode.hpp                       — включает FlowWeavingGCodeState.hpp
-├── GCode.cpp                       — Z-mod runtime (строки ~7596–7732)
-└── PrintConfig.hpp/cpp             — все FW параметры
-```
-
-### Регистрация в сборке
-
-Все 7 `.hpp` файлов `FlowWeaving/` прописаны в
-`src/libslic3r/CMakeLists.txt` (строки 154–160).
-
-### Регистрация типа Fill
-
-`FillBase.cpp` → `Fill::new_from_type()`:
-```cpp
-case ipFlowWeaving: return new FillFlowWeaving();
+extrusion_ratio = (path.height + z_diff) / path.height
 ```
 
 ---
 
-## 5. Исследование сегодня (2026-06-10)
+## 3. Wave Modulator Architecture
 
-### 5.1 Code Style Audit — соответствие архитектуре Fill/
-
-Изучены все fill-типы и паттерны:
-
-**Прецедент субдиректории:**
-- `Fill/Lightning/` — 6 файлов, самостоятельная технология → прецедент оправдан
-- `Fill/FlowWeaving/` аналогично → субдиректория принята ✅
-
-**Исправлено:**
-- `CMakeLists.txt`: добавлены 3 недостающих `.hpp` + новый `FlowWeavingGCodeState.hpp`
-- `GCode.hpp`: заменены 4 отдельных FW include на единый агрегатор
-
-**Паттерн агрегирующего хедера** (по аналогии с `GCode/AdaptivePAProcessor.hpp`):
-```cpp
-// FlowWeavingGCodeState.hpp — единственный include в GCode.hpp
-#include "FlowWeavingContext.hpp"
-#include "FlowWeavingZModulator.hpp"
-#include "FlowWeavingFadeEnvelope.hpp"
-#include "FlowWeavingZClamp.hpp"
-```
-
-### 5.2 Анализ FillBase.hpp — что уже есть в базовом классе
-
-| Поле Fill | Доступно в fill_surface_extrusion() |
-|-----------|-------------------------------------|
-| `layer_id` | ✅ |
-| `z` | ✅ (print_z текущего слоя) |
-| `spacing`, `overlap`, `angle` | ✅ |
-| `bounding_box` | ✅ |
-| `print_config` | ✅ → **все параметры принтера** |
-| `print_object_config` | ✅ |
-| `no_overlap_expolygons` | ✅ (текущий слой) |
-| `fw_safe_expolygons` | ✅ (наше поле) |
-
-`FillParams` дополнительно:
-- `flow` → width, height, nozzle, mm3_per_mm
-- `config` → `PrintRegionConfig*` → все FW параметры
-- `layer_height`
-- `extrusion_role`
-
-**Вывод**: `FillFlowWeaving::fill_surface_extrusion()` имеет доступ
-ко ВСЕМ данным, необходимым для вычисления Z-модуляции.
-
-### 5.3 Обнаружение ZAA-механизма (ContourZ.cpp)
-
-Найден существующий паттерн **Z Anti-Aliasing (ZAA)** в `ContourZ.cpp`:
+`FlowWeavingZModulator` is an abstract base with a factory. Currently one implementation:
 
 ```cpp
-// ContourZ.cpp — записывает Z в точки polyline:
-path.polyline = move(polyline_with_3d_z_offsets);
-path.z_contoured = true;  // flag на ExtrusionPath
-
-// GCode.cpp строка 7619 — уже обрабатывает это:
-if (path.z_contoured) {
-    coordf_t z_diff = unscale_(line.b.z());  // читает z из Point3
-    double z = m_nominal_z + z_diff;
-    m_writer.extrude_to_xyz(Vec3d(x, y, z), dE, ...);
-}
-```
-
-`FillFlowWeaving` уже создаёт `Point3(sub_b, 0)` с `z = 0`.
-Нужно заменить `0` на вычисленное Z-смещение и поставить `z_contoured = true`.
-
-**Конвенция**: `scale_(z_offset_mm)` → `point.z()`, `unscale_(point.z())` в GCode.
-
-### 5.4 Анализ оверинжениринга в GCode.cpp
-
-Сравнение текущей реализации с тем, что уже есть в Fill:
-
-| Компонент в GCode.cpp | Дублирует | Может быть заменён |
-|-----------------------|-----------|-------------------|
-| `FlowWeavingZModulator` | Логику `accumulated` из FillFlowWeaving | `point.z()` + ZAA path |
-| `FlowWeavingFadeEnvelope` | `fw_safe_expolygons` inside_safe check | Тест `fw_safe_expolygons` в Fill |
-| `FlowWeavingZClamp` | `!inside_safe → z=0` | Тривиальный `if` в Fill |
-| `FlowWeavingContext` | (debug only) | Inline в FillFlowWeaving |
-
-**Заключение**: текущая GCode-реализация (строки 7596–7732, ~80 строк) является
-оверинжинирингом. Весь этот код можно переместить в `FillFlowWeaving::fill_surface_extrusion()`,
-используя стандартный ZAA путь GCode.cpp.
-
----
-
-## 6. Запланированный рефакторинг (следующий этап)
-
-### Цель
-
-Переместить всю Z-логику из GCode.cpp в `FillFlowWeaving::fill_surface_extrusion()`.
-GCode.cpp обрабатывает через стандартный ZAA-путь (`path.z_contoured`).
-
-### Изменения в FillFlowWeaving::fill_surface_extrusion()
-
-```cpp
-// После вычисления inside_safe и taper (уже есть для XY):
-double z_phase = M_PI * (fw_phase_idx % 2);  // совпадает с XY-фазой
-double z_amp_pct = params.config->flow_weaving_z_amplitude.value;
-double z_amp = (z_amp_pct / 100.0) * base_h;
-
-// Overlap degree: асимметрия вниз
-double overlap_deg = params.config->flow_weaving_overlap_degree.value;
-double pos_t = std::sin(2.0*M_PI*pos/fw_period + z_phase);
-double z_sym = pos_t >= 0 ? pos_t : pos_t * (1.0 + overlap_deg);
-
-// Z fade = тот же taper что и для XY (из fw_safe_expolygons)
-double z_offset = z_amp * taper * z_sym;
-
-// Clamp к слою
-z_offset = std::clamp(z_offset, -base_h, base_h);
-
-// Запись в точку
-Point3 pt3(sub_b, scale_(z_offset));  // z в scaled units
-ExtrusionPath path(...);
-path.polyline.points = { Point3(sub_a, ...), pt3 };
-path.z_contoured = true;  // ← GCode.cpp автоматически использует ZAA-путь
-```
-
-### Что удаляется
-
-- `FlowWeavingZModulator.hpp` — весь файл
-- `FlowWeavingFadeEnvelope.hpp` — весь файл
-- `FlowWeavingZClamp.hpp` — весь файл
-- `FlowWeavingContext.hpp` — весь файл
-- `FlowWeavingGCodeState.hpp` — агрегатор больше не нужен
-- GCode.cpp строки 7639–7732 — ~80 строк FW-логики
-- `m_fw_z_mod`, `m_fw_fade` — члены класса GCode
-
-### Что остаётся в GCode.cpp
-
-Практически ничего FW-специфичного. Arc fitting guard:
-```cpp
-// БЫЛО: || fw_z_active
-// СТАЛО: уже есть path.z_contoured в условии — ничего добавлять не нужно
-```
-
-**Итог**: 80 строк GCode.cpp → 15 строк в FillFlowWeaving, через стандартный ZAA-путь.
-
-### Проверки перед реализацией
-
-1. **Кросс-путевая фаза**: каждый `ExtrusionMultiPath` = одна infill-линия.
-   Фаза привязана к XY-позиции вдоль линии, не к глобальной дистанции → OK.
-
-2. **Z-масштаб**: использовать ту же конвенцию что ZAA:
-   - запись: `scale_(z_offset_mm)` → `Point3.z()`
-   - чтение: `unscale_(line.b.z())` в GCode.cpp
-
-3. **Arc fitting guard**: уже содержит `path.z_contoured` → автоматически работает.
-
-4. **overlap_degree**: переезжает вместе с Z-вычислением.
-
-5. **gcode_comments debug**: если нужны FW debug комментарии — добавить опциональный
-   кастомный комментарий в ExtrusionPath или убрать совсем.
-
----
-
-## 7. История реализации
-
-### Этапы разработки
-
-| Дата | Что сделано |
-|------|-------------|
-| 2026-06-07/08 | Прототип: XY модуляция, базовая Z-модуляция в GCode.cpp |
-| 2026-06-08 | Benchy тест: обнаружены проблемы на границах (deck, hull) |
-| 2026-06-08 | Safe zone через fw_safe_expolygons в Fill.cpp |
-| 2026-06-09 | XY-aware Z clamp (FlowWeavingZClamp), endpoint taper |
-| 2026-06-09 | Анализ G-code: отладка и верификация Z-модуляции |
-| 2026-06-09 | Dead code cleanup |
-| 2026-06-10 | Code style audit → CMakeLists fix, GCode.hpp агрегатор |
-| 2026-06-10 | FadeEnvelope (per-point XY fade) |
-| 2026-06-10 | overlap_degree параметр |
-| 2026-06-10 | Анализ FillBase + ZAA → обнаружен оверинжениринг GCode |
-| **TODO** | Рефакторинг: Z-логика → FillFlowWeaving + ZAA path |
-| **TODO** | GUI слайдер для overlap_degree |
-| **TODO** | Физические тесты прочности |
-
-### Ключевые баги и решения
-
-**Проблема**: Z-модуляция выходит за пределы стен на Benchy hull  
-**Причина**: Стены Benchy наклонные — на Z-уровне выше wall уже, но safe zone это не учитывала  
-**Решение**: `fw_safe_expolygons` = intersection across ALL layers in Z-range
-
-**Проблема**: Нозл бьёт deck Benchy (промежуточная сплошная поверхность)  
-**Причина**: Z clamp считал от верха модели, не от ближайшего shell  
-**Решение**: FlowWeavingZClamp — XY-aware walk до ближайшего shell по соседним слоям
-
-**Проблема**: Резкие Z-скачки на границах infill  
-**Причина**: Нет плавного затухания на первых/последних слоях infill  
-**Решение**: FlowWeavingFadeEnvelope — per-point XY walk, smoothstep(n/fade_n)
-
-**Проблема**: combine_infill ломает phase alternation  
-**Причина**: `layer_id % 2` при combine=2 — все infill-слои нечётные → одна фаза  
-**Решение**: `combine_step = path.height / layer_height`, `fw_phase_idx = layer_id / combine_step`
-
----
-
-## 8. Референсы
-
-### Академические
-
-- Coffigniez et al. (2021) — Non-planar FDM toolpaths for improved interlayer bonding
-- Kubalak et al. (2019) — Multi-axis FDM for mechanical interlock
-- Luo et al. (2020) — Sinusoidal nozzle path for improved Z-strength
-
-### Кодовая база OrcaSlicer
-
-| Файл | Роль | Чему учит |
-|------|------|-----------|
-| `ContourZ.cpp` | ZAA (Z Anti-Aliasing) | Как хранить Z в `Point3.z()` и использовать `z_contoured` |
-| `Fill/Lightning/` | Субдиректория fill | Прецедент для нашей `Fill/FlowWeaving/` |
-| `GCode/AdaptivePAProcessor.hpp` | Агрегирующий хедер | Паттерн для `FlowWeavingGCodeState.hpp` |
-| `Fill/FillBase.hpp` | Базовый класс | Все поля доступные любому Fill |
-| `Fill/Fill.cpp` | `make_fills()` | Как подготовить данные (fw_safe_expolygons) |
-| `Fill/FillRectilinear.hpp` | Рекрилинейный fill | Базовый паттерн для наследования |
-
-### Важные сигнатуры
-
-```cpp
-// Базовый класс
-class Fill {
-    size_t layer_id;           // индекс слоя
-    coordf_t z;                // print_z
-    const PrintConfig* print_config;
-    const PrintObjectConfig* print_object_config;
-    ExPolygons no_overlap_expolygons;  // текущий слой
-    ExPolygons fw_safe_expolygons;     // наш: пересечение по Z-диапазону
-
-    virtual void fill_surface_extrusion(
-        const Surface*, const FillParams&, ExtrusionEntitiesPtr&);
+class SineModulator : public FlowWeavingModulator {
+    double compute(pos, period, phase_rad) const override {
+        return sin(2π × pos / period + phase_rad);
+    }
 };
-
-// Params при вызове
-struct FillParams {
-    Flow flow;                     // width, height, mm3_per_mm
-    const PrintRegionConfig* config; // все FW параметры
-    coordf_t layer_height;
-    ExtrusionRole extrusion_role;
-};
-
-// ZAA-путь в GCode.cpp
-if (path.z_contoured) {
-    coordf_t z_diff = unscale_(line.b.z()); // читает из Point3
-    m_writer.extrude_to_xyz(Vec3d(x, y, m_nominal_z + z_diff), dE, ...);
-}
 ```
+
+The `taper()` method (shared by all subclasses) returns smoothstep distance from wall:
+```
+dist_from_wall = min(pos, total_len - pos)
+if dist < taper_len: smoothstep(dist / taper_len)
+else: 1.0
+```
+
+**Adding new wave types:**
+1. Add `SquareModulator`, `PerlinModulator` etc. as subclasses
+2. Add entry to `ModulatorType` enum
+3. Add case to `FlowWeavingModulator::create()` factory
+4. Add config parameter to select type
+
+---
+
+## 4. Z-Safety System
+
+### 4.1 Lower Bound (implemented)
+
+Two limits, stricter one applies:
+
+```
+overlap_limit  = -(layer_h × z_overlap_pct / 100)
+absolute_floor = -(this->z - first_layer_h)
+min_z_diff = max(overlap_limit, absolute_floor)
+```
+
+The `absolute_floor` is the exact distance from current nominal_z to the top of the first layer. On all layers except the very first few infill layers, `overlap_limit` is the binding constraint.
+
+**Example (layer_h=0.2, first_layer_h=0.2, z_overlap=50%):**
+- `overlap_limit = -0.10mm`
+- Layer 1 (z=0.30): `absolute_floor = -0.10mm` → both equal → limit is -0.10mm
+- Layer 2 (z=0.40): `absolute_floor = -0.20mm` → `overlap_limit = -0.10mm` wins
+- All upper layers: `overlap_limit = -0.10mm` always wins
+
+### 4.2 Upper Bound (implemented)
+
+```
+x = clamp(infill_layers_above / top_taper_n, 0, 1)
+upper_taper = x² × (3 - 2x)   // smoothstep ∈ [0, 1]
+max_z_up = z_amp_frac × layer_h × upper_taper
+
+z_diff = min(z_diff, max_z_up)  // only caps positive values
+```
+
+`infill_layers_above` is populated by `Fill.cpp::make_fills()`:
+```cpp
+// Count consecutive infill layers above, up to MAX_TAPER_LOOK=10
+int above_count = 0;
+for (size_t li = layer_idx + 1; li < layers.size() && above_count < 10; ++li) {
+    bool has_infill = false;
+    for (const LayerRegion* lr : layers[li]->regions())
+        if (!lr->fill_no_overlap_expolygons.empty()) { has_infill = true; break; }
+    if (!has_infill) break;
+    ++above_count;
+}
+f->infill_layers_above = above_count;
+```
+
+---
+
+## 5. Cross-Layer Safe Zone
+
+The modulation gate prevents Z/XY modulation near perimeters (wall overlap zone). To avoid the wave pattern from poking into adjacent layers' solid regions:
+
+```
+safe_zone = no_overlap_expolygons   // current layer boundary
+if (no_overlap_above not empty):
+    safe_zone = intersect(safe_zone, no_overlap_above)
+if (no_overlap_below not empty):
+    safe_zone = intersect(safe_zone, no_overlap_below)
+
+gate = point_in_polygon(sub_segment_midpoint, safe_zone) ? 1.0 : 0.0
+```
+
+`no_overlap_above` / `no_overlap_below` are populated by `make_fills()` only for fills where `needs_cross_layer_data()` returns `true`. `FillFlowWeaving` overrides this to return `true`.
+
+---
+
+## 6. Parameter Registration Pipeline
+
+Every new FlowWeaving parameter must be registered in **7 locations**:
+
+```
+1. PrintConfig.hpp   — macro: ((ConfigOptionFloat, flow_weaving_xxx))
+2. PrintConfig.cpp   — definition: label, tooltip, sidetext, min, max, mode, default
+3. Preset.cpp        — s_Preset_print_options[] string list
+4. Tab.cpp           — optgroup->append_single_option_line("flow_weaving_xxx")
+5. ConfigManipulation.cpp line ~650  — toggle_line loop (print tab)
+6. ConfigManipulation.cpp line ~996  — toggle_line loop (object tab)
+7. GUI_Factories.cpp — PART_CATEGORY_SETTINGS modifier list
+8. FillFlowWeaving.cpp — params.config->flow_weaving_xxx.value
+```
+
+---
+
+## 7. GCode Output Analysis
+
+### 7.1 Test File: Molding-FWeav.gcode (June 2026)
+
+Settings: `z_amp=95%, period=1mm, xy_amp=50%, z_overlap=50%, phase_offset=0.5`
+
+```
+Total XYZE moves: 38,018
+Z range: [0.3000 .. 3.9900]mm
+Z < first_layer_h violations: 0 ✓
+Expected span: 0.19 + 0.10 = 0.29mm
+Actual span:   0.29mm ✓
+```
+
+### 7.2 Per-Layer Pattern
+
+The pattern is a predictable alternation between "all up" and "all down" layers when viewing aggregate min/max:
+- This is correct — it's the phase_offset=0.5 doing its job
+- Even lines in a layer are in phase, odd lines are antiphase
+- Adjacent layers are in antiphase to each other
+- Result: layer N peaks nest into layer N+1 valleys
+
+### 7.3 Observed Issue: Top Layer Overshoot
+
+**Problem found in real print:** Nozzle protruded into top solid shell.
+**Root cause:** z_amp = +0.190mm applied uniformly including last infill layer.
+**Fix:** `flow_weaving_top_taper_layers` smooth ceiling (implemented).
+
+---
+
+## 8. ZAA Mechanism in GCode.cpp
+
+FlowWeaving leverages the existing ZAA (Z Adaptive Architecture) in GCode.cpp.
+**No changes were made to GCode.cpp.** The relevant existing code:
+
+```
+Line ~6867: if (path.z_contoured) compute first z for travel
+Line ~6882: if (path.z_contoured) adjust Z before extrusion starts
+Line ~6889: if (!path.z_contoured) reset Z after contoured block
+Line ~7507: arc fitting disabled for z_contoured paths
+Line ~7527: z_diff emission for non-variable-speed paths
+Line ~7735: z_diff emission for variable-speed paths
+```
+
+E-compensation formula (line ~7527):
+```cpp
+double extrusion_ratio = (path.height + z_diff) / path.height;
+// When nozzle dips: z_diff < 0, ratio < 1, less E extruded
+// When nozzle rises: z_diff > 0, ratio > 1, more E extruded
+```
+
+---
+
+## 9. Agent Working Rules
+
+> These rules apply to all AI agents working on this codebase.
+
+1. **Explain before changing:** Always describe planned changes and wait for user confirmation before editing files.
+
+2. **No commits without explicit request:** Never propose `git commit` automatically. Only commit when user explicitly asks.
+
+3. **No magic constants:** Never hardcode values like `0.1`, `MIN_SAFE_Z = 0.1`. Derive all limits from print structure parameters (`layer_h`, `first_layer_h`, `nozzle_d`, etc.).
+
+4. **7-file parameter pipeline:** Every new FlowWeaving config parameter must be registered in all 7 locations listed in Section 6.
+
+5. **No base class pollution:** All FlowWeaving-specific logic stays in `Fill/FlowWeaving/`. Do not add FlowWeaving fields to `ExtrusionEntity.hpp`, `GCode.cpp`, or other base classes unless absolutely unavoidable.
+
+6. **Isolation principle:** The design goal is zero changes to `GCode.cpp` and `ExtrusionEntity.hpp`. Use existing mechanisms (`z_contoured`, `mm3_per_mm`, `ExtrusionPathContoured`).
+
+---
+
+## 10. Phase Alternation Implementation
+
+Within a layer, odd-numbered infill lines carry a π-phase shift:
+
+```cpp
+// layer_base_phase: alternates between layers for interlocking
+const size_t same_dir_idx     = this->layer_id / 2;
+const double layer_base_phase = ((this->layer_id % 2 == 0) ? 0.0 : M_PI)
+                              + same_dir_idx * phase_offset * 2.0 * M_PI;
+
+// Per-polyline: odd lines are antiphase to even lines
+const double phase_rad = layer_base_phase + ((poly_idx % 2 != 0) ? M_PI : 0.0);
+```
+
+Result:
+- Even lines: wave `[−amp .. +amp]`
+- Odd lines: wave `[+amp .. −amp]` (antiphase)
+- Adjacent same-direction layers: base_phase shifts by `phase_offset × 2π`
+
+This produces the zipper interlock pattern described in CONCEPT.md Section 3.2.
+
+---
+
+## 11. Architecture Decisions & Rationale
+
+### Decision 1: Sub-segmentation over flow_factors[]
+**Rejected:** `flow_factors[]` array in `ExtrusionPathContoured` (one factor per point).  
+**Reason:** Pollutes base class with FlowWeaving-specific data — violates isolation principle.  
+**Chosen:** Split each infill line into N short `ExtrusionPathContoured` sub-segments. Each has its own `mm3_per_mm` (standard existing field). Zero changes to `ExtrusionEntity.hpp`.
+
+### Decision 2: Re-use ZAA `z_contoured` mechanism
+**Why:** `GCode.cpp` already handles Z-contoured paths with `extrusion_ratio = (height + z_diff) / height`. E-compensation is automatic. No duplication of Z-emission logic.  
+**Result:** Zero changes to `GCode.cpp` needed for Z modulation.
+
+### Decision 3: first_layer_h as absolute floor, not hardcoded constant
+**Rule:** No magic numbers. All limits derived from print structure:
+- `first_layer_h = print_config->initial_layer_print_height.value`
+- `layer_h = params.layer_height`
+- `nozzle_d = params.flow.nozzle_diameter()`
+
+### Decision 4: `infill_layers_above` counter in make_fills()
+**Why:** Top taper requires knowing how many infill layers are above. Fill object only sees its own layer. `make_fills()` already iterates all layers — minimal cost to add a counter. Cap at `MAX_TAPER_LOOK=10` to limit loop cost.
+
+### Decision 5: Smoothstep over linear taper
+**Why:** Linear taper creates visible discontinuity in wave amplitude (derivative is discontinuous at boundaries). Smoothstep `f(x) = 3x² - 2x³` has zero derivative at both endpoints → transition is invisible in G-code output.
+
+### Decision 6: Global perp direction for XY displacement
+**Why:** Per-segment perpendicular flips direction on zigzag infill (odd lines reverse travel direction). Using the global fill-angle perpendicular ensures the XY wave goes consistently in the same spatial direction regardless of line parity. Without this, the XY displacement cancels out and produces no visible wave.
+

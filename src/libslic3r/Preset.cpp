@@ -1296,6 +1296,20 @@ static std::vector<std::string> s_Preset_print_options{
     "zaa_minimize_perimeter_height",
     "zaa_dont_alternate_fill_direction",
     "zaa_min_z",
+    // FlowWeaving
+    "flow_weaving_z_amplitude",
+    "flow_weaving_xy_amplitude",
+    "flow_weaving_xy_path_amplitude",
+    "flow_weaving_period",
+    "flow_weaving_phase_offset",
+    "flow_weaving_z_phase_offset",
+    "flow_weaving_z_overlap",
+    "flow_weaving_top_taper_layers",
+    "flow_weaving_speed",
+    "flow_weaving_taper_length",
+    "flow_weaving_wall_overlap",
+    "flow_weaving_ironing",
+    "flow_weaving_ironing_speed",
     "ironing_expansion",
     // Flow Weaving
     "flow_weaving_z_amplitude",
@@ -2425,6 +2439,10 @@ bool PresetCollection::validate_preset(const std::string &preset_name, std::stri
             const std::string canonical_inherit_name = this->canonical_preset_name(inherit_name);
             it    = this->find_preset_internal(canonical_inherit_name);
             found = it != m_presets.end() && it->name == canonical_inherit_name && is_trusted(*it);
+            if (!found) {
+                it    = this->find_preset_renamed(canonical_inherit_name);
+                found = it != m_presets.end() && is_trusted(*it);
+            }
             if (found)
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": preset_name %1%, inherit_name %2%, found inherit in list")%preset_name %inherit_name;
             else
@@ -2516,7 +2534,9 @@ std::pair<Preset*, bool> PresetCollection::load_external_preset(
 
     if (!inherits.empty() && (different_settings_list.size() > 0)) {
         auto iter = this->find_preset_internal(inherits);
-        if (iter != m_presets.end() && iter->name == inherits) {
+        if (iter == m_presets.end() || iter->name != inherits)
+            iter = this->find_preset_renamed(inherits);
+        if (iter != m_presets.end()) {
             //std::vector<std::string> dirty_options = cfg.diff(iter->config);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": change preset %1% inherit %2% 's value to %3% 's values")%original_name %inherits %path;
             cfg.update_non_diff_values_to_base_config(iter->config, keys, different_settings_list, extruder_id_name, extruder_variant_name, *key_set1, *key_set2);
@@ -2568,7 +2588,9 @@ std::pair<Preset*, bool> PresetCollection::load_external_preset(
         // and override its settings with the loaded ones.
         assert(it == m_presets.end());
         it    = this->find_preset_internal(inherits);
-        found = it != m_presets.end() && it->name == inherits;
+        if (it == m_presets.end() || it->name != inherits)
+            it = this->find_preset_renamed(inherits);
+        found = it != m_presets.end();
         if (found && profile_print_params_same(it->config, cfg)) {
             // The system preset exists and it matches the values stored inside config.
             if (select == LoadAndSelect::Always)

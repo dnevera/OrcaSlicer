@@ -14,6 +14,7 @@
 #include "GCode.hpp"
 #include "GCode/WipeTower.hpp"
 #include "GCode/WipeTower2.hpp"
+#include "VortekWipeTower.hpp"
 #include "Utils.hpp"
 #include "PrintConfig.hpp"
 #include "MaterialType.hpp"
@@ -2410,8 +2411,6 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     obj->set_done(posDetectOverhangsForLift);
             }
             else {
-                // H2C TODO
-                // obj->set_auto_circle_compenstaion_params(auto_contour_holes_compensation_params);
                 obj->make_perimeters();
                 obj->infill();
                 obj->ironing();
@@ -2445,20 +2444,6 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             }
             this->set_geometric_unprintable_filaments(geometric_unprintables);
         }
-
-        // H2C TODO - VISUAL ONLY
-        // {
-        //     std::unordered_map<int,std::unordered_map<int,double>> filament_print_time;
-        //     for(PrintObject* obj : m_objects){
-        //         auto obj_filament_print_time = obj->calc_estimated_filament_print_time();
-        //         for(auto [filament_idx,extruder_time] : obj_filament_print_time) {
-        //             for (auto [extruder_idx, time] : extruder_time) {
-        //                 filament_print_time[filament_idx][extruder_idx] += time;
-        //             }
-        //         }
-        //     }
-        //     this->set_filament_print_time(filament_print_time);
-        // }
 
         m_nozzle_group_result.reset();
         m_wipe_tower_data.clear();
@@ -3310,11 +3295,6 @@ const WipeTowerData &Print::wipe_tower_data(size_t filaments_cnt) const
 
     if (! is_step_done(psWipeTower) && filaments_cnt !=0) {
         double wipe_volume  = *std::max_element(m_config.filament_prime_volume.values.begin(), m_config.filament_prime_volume.values.end());
-        // H2C TODO
-        // if (m_config.prime_volume_mode == pvmSaving) {
-        //     for (auto& v : filament_wipe_volume)
-        //         v = 15.f;
-        // }
         int filament_depth_count = m_config.nozzle_diameter.values.size() == 2 ? filaments_cnt : filaments_cnt - 1;
         if (filaments_cnt == 1 && enable_timelapse_print()) filament_depth_count = 1;
         double volume = wipe_volume * filament_depth_count;
@@ -3435,6 +3415,10 @@ void Print::_make_wipe_tower()
         for (size_t i = 0; i < number_of_extruders; ++i)
             wipe_tower.set_extruder(i, m_config);
 
+        // Needed by WipeTower::finish_block to clamp the contact-layer pre-extrusion
+        // travel; without it the clamp collapses the start move to X0 (see WipeTower.cpp).
+        wipe_tower.set_shared_print_bed(this->get_extruder_shared_printable_polygon());
+
         // BBS: remove priming logic
         // m_wipe_tower_data.priming = Slic3r::make_unique<std::vector<WipeTower::ToolChangeResult>>(
         //    wipe_tower.prime((float)this->skirt_first_layer_height(), m_wipe_tower_data.tool_ordering.all_extruders(), false));
@@ -3467,9 +3451,7 @@ void Print::_make_wipe_tower()
 
         unsigned int old_filament_id = m_wipe_tower_data.tool_ordering.first_extruder();
         if (group_result) {
-            auto nozzle_info = group_result->get_nozzle_for_filament(old_filament_id, layer_idx);
-            if (nozzle_info)
-                nozzle_recorder.set_nozzle_status(nozzle_info->group_id, old_filament_id);
+            Vortek::WipeTower::initialize_nozzle_status(nozzle_recorder, *group_result, this);
         }
 
         for (auto& layer_tools : m_wipe_tower_data.tool_ordering.layer_tools()) { // for all layers
@@ -3498,6 +3480,17 @@ void Print::_make_wipe_tower()
                     }
                 }
 
+                // H2C: detect if the target nozzle already holds the correct filament.
+                // When true, no ramming or nozzle-change is needed — only a minimal
+                // toolchange entry (zero depth) should be generated. We pass this flag
+                // to plan_toolchange instead of skipping it entirely, because
+                // WipeTowerIntegration expects a 1:1 mapping between plan entries
+                // and tool_change() calls.
+                bool nozzle_already_loaded = false;
+                if (Vortek::WipeTower::is_h2c_printer(this)) {
+                    nozzle_already_loaded = (m_config.prime_volume_mode == PrimeVolumeMode::pvmSaving) && group_result && (prev_nozzle_filament == (int)filament_id);
+                }
+
                 float volume_to_purge = 0;
 
                 if (!nozzle_recorder.is_nozzle_empty(nozzle_id) && (int)filament_id != prev_nozzle_filament) {
@@ -3524,8 +3517,28 @@ void Print::_make_wipe_tower()
                     wipe_volume_ec = 15.f;
                     wipe_volume_nc = 15.f;
                 }
+
+                // H2C: when nozzle already loaded, zero out everything — no purge,
+                // no prime, no ramming needed.
+                if (nozzle_already_loaded) {
+                    wipe_volume_ec = 0.f;
+                    wipe_volume_nc = 0.f;
+                    volume_to_purge = 0.f;
+                }
+
+                BOOST_LOG_TRIVIAL(warning) << "[H2C_DEBUG] plan_toolchange:"
+                    << " old=" << old_filament_id
+                    << " new=" << filament_id
+                    << " prev_nozzle_filament=" << prev_nozzle_filament
+                    << " nozzle_already_loaded=" << nozzle_already_loaded
+                    << " wipe_ec=" << wipe_volume_ec
+                    << " wipe_nc=" << wipe_volume_nc
+                    << " purge=" << volume_to_purge
+                    << " nozzle_id=" << nozzle_id
+                    << " extruder_id=" << extruder_id;
                 wipe_tower.plan_toolchange((float)layer_tools.print_z, (float)layer_tools.wipe_tower_layer_height, old_filament_id, filament_id,
-                                           wipe_volume_ec, wipe_volume_nc, volume_to_purge);
+                                           wipe_volume_ec, wipe_volume_nc, volume_to_purge, nozzle_already_loaded);
+
                 old_filament_id = filament_id;
 
                 nozzle_recorder.set_nozzle_status(nozzle_id, filament_id);
@@ -3777,6 +3790,7 @@ void Print::export_gcode_from_previous_file(const std::string& file, GCodeProces
 {
     try {
         GCodeProcessor processor;
+        processor.set_print(this);
         GCodeProcessor::s_IsBBLPrinter = is_BBL_printer();
         if (result && result->nozzle_group_result)
             processor.initialize_from_context(*result->nozzle_group_result);

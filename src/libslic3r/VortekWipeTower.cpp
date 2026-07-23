@@ -8,6 +8,7 @@
 #include "VortekWipeTower.hpp"
 #include "GCode/WipeTowerWriter.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Print.hpp"
 #include "libslic3r/MultiNozzleUtils.hpp"
 #include "GCode/GCodeProcessor.hpp"
 
@@ -16,6 +17,89 @@
 #include <algorithm>
 
 namespace Vortek {
+
+bool WipeTower::is_h2c_printer(const Slic3r::Print* print)
+{
+    if (!print) return false;
+    return print->is_BBL_printer() &&
+           (print->config().nozzle_diameter.size() > 1) &&
+           (print->config().extruder_max_nozzle_count.values.size() > 1) &&
+           (print->config().extruder_max_nozzle_count.values[1] > 1);
+}
+
+bool WipeTower::is_h2c_printer(const Slic3r::PrintConfig& config)
+{
+    return (config.nozzle_diameter.size() > 1) &&
+           (config.extruder_max_nozzle_count.values.size() > 1) &&
+           (config.extruder_max_nozzle_count.values[1] > 1);
+}
+
+bool WipeTower::is_h2c_printer(const Slic3r::DynamicConfig& config)
+{
+    auto* nozzle_diam_opt = config.option<Slic3r::ConfigOptionFloats>("nozzle_diameter");
+    auto* max_nozzle_count_opt = config.option<Slic3r::ConfigOptionIntsNullable>("extruder_max_nozzle_count");
+    if (!nozzle_diam_opt || nozzle_diam_opt->values.size() <= 1)
+        return false;
+    if (!max_nozzle_count_opt || max_nozzle_count_opt->values.size() <= 1 ||
+        max_nozzle_count_opt->values[1] <= 1)
+        return false;
+    return true;
+}
+
+bool WipeTower::is_h2c_printer(const std::string& printer_model)
+{
+    return printer_model == "Bambu Lab H2C";
+}
+
+// Ref: Adapted from BambuStudio's GCodeProcessor::process_filament_change (see src/libslic3r/GCode/GCodeProcessor.cpp in BBS)
+// Calculates load/unload times specifically for H2C multi-nozzle system.
+FilamentChangeTimeResult WipeTower::calculate_filament_change_time(
+    const std::string& printer_model,
+    int new_extruder_id,
+    int next_filament_id,
+    int old_filament_in_extruder,
+    int old_filament_in_nozzle,
+    bool filament_in_nozzle_change,
+    bool nozzle_in_extruder_change,
+    const std::vector<unsigned char>& m_filament_id,
+    const std::function<float(size_t)>& get_filament_unload_time,
+    const std::function<float(size_t)>& get_filament_load_time)
+{
+    FilamentChangeTimeResult res;
+    if (!is_h2c_printer(printer_model)) {
+        res.performed = false;
+        return res;
+    }
+    res.performed = true;
+
+    // H2C has two physical extruders: 
+    // Left extruder (id=0) has 1 physical nozzle.
+    // Right extruder (id=1) has 1 physical Vortek nozzle fed by AMS.
+    // Therefore, any filament change on the right extruder requires physical AMS unloading/loading.
+    if (new_extruder_id == 1) {
+        int last_filament = (m_filament_id.size() > 1 && m_filament_id[1] != (unsigned char)(-1)) ? (int)m_filament_id[1] : -1;
+        bool perform_static_time_calc = (last_filament != next_filament_id);
+        if (perform_static_time_calc) {
+            if (last_filament >= 0)
+                res.extra_time += get_filament_unload_time(static_cast<size_t>(last_filament));
+            res.extruder_unloaded = false;
+            res.extra_time += get_filament_load_time(static_cast<size_t>(next_filament_id));
+            if (last_filament != -1)
+                res.flush_filament_changed = true;
+        }
+    } else {
+        bool perform_static_time_calc = filament_in_nozzle_change;
+        if (perform_static_time_calc) {
+            if (old_filament_in_extruder >= 0)
+                res.extra_time += get_filament_unload_time(static_cast<size_t>(old_filament_in_extruder));
+            res.extruder_unloaded = false;
+            res.extra_time += get_filament_load_time(static_cast<size_t>(next_filament_id));
+            if (old_filament_in_nozzle != -1)
+                res.flush_filament_changed = true;
+        }
+    }
+    return res;
+}
 
 /**
  * @brief Initializes WipeTower instance variables using values from the print configuration.
@@ -250,6 +334,62 @@ bool WipeTower::is_same_nozzle(const Slic3r::WipeTower& tower, int filament_id_1
     if (!tower.m_multi_nozzle_group_result)
         return true;
     return tower.m_multi_nozzle_group_result->are_filaments_same_nozzle(filament_id_1, filament_id_2, layer_id);
+}
+
+// Ref: Adapted from BambuStudio's GCodeProcessor::initialize_from_context (see src/libslic3r/GCode/GCodeProcessor.cpp in BBS)
+void WipeTower::initialize_nozzle_status(
+    Slic3r::MultiNozzleUtils::NozzleStatusRecorder& recorder,
+    const Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult& group_result,
+    const Slic3r::Print* print)
+{
+    if (!is_h2c_printer(print)) return;
+
+    std::set<int> initialized_nozzles;
+
+    // Collect filament IDs to seed from: prefer per-layer sequences, fall back to used_filaments.
+    // The 3-arg LayeredNozzleGroupResult::create() does NOT populate _layer_filament_sequences,
+    // so the recorder would remain empty — causing get_filament_in_nozzle() to always return -1
+    // and filament_in_nozzle_change to be true on every tool change, adding spurious 56s penalties.
+    const auto& layer_seqs = group_result.get_layer_filament_sequences();
+    if (!layer_seqs.empty()) {
+        for (const auto& seq : layer_seqs) {
+            for (const auto filament_id : seq) {
+                auto nozzle_info = group_result.get_nozzle_for_filament(filament_id, 0);
+                if (nozzle_info) {
+                    int nozzle_id = nozzle_info->group_id;
+                    if (initialized_nozzles.find(nozzle_id) == initialized_nozzles.end()) {
+                        recorder.set_nozzle_status(nozzle_id, filament_id, nozzle_info->extruder_id);
+                        initialized_nozzles.insert(nozzle_id);
+                    }
+                }
+            }
+        }
+    } else {
+        // Fallback: layer sequences are empty (3-arg create path).
+        // Seed from used_filaments via the default nozzle map.
+        for (const auto filament_id : group_result.get_used_filaments()) {
+            auto nozzle_info = group_result.get_nozzle_for_filament(static_cast<int>(filament_id));
+            if (nozzle_info) {
+                int nozzle_id = nozzle_info->group_id;
+                if (initialized_nozzles.find(nozzle_id) == initialized_nozzles.end()) {
+                    recorder.set_nozzle_status(nozzle_id, static_cast<int>(filament_id), nozzle_info->extruder_id);
+                    initialized_nozzles.insert(nozzle_id);
+                }
+            }
+        }
+    }
+}
+
+void WipeTower::adjust_prime_volumes(
+    int prev_nozzle_filament,
+    int new_filament_id,
+    float& wipe_volume_ec,
+    float& wipe_volume_nc)
+{
+    if (prev_nozzle_filament == new_filament_id) {
+        wipe_volume_ec = 0.f;
+        wipe_volume_nc = 0.f;
+    }
 }
 
 } // namespace Vortek

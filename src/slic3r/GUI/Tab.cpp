@@ -2508,9 +2508,17 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Flow weaving"), L"param_flowweaving_group");
         optgroup->append_single_option_line("flow_weaving_z_amplitude");
         optgroup->append_single_option_line("flow_weaving_xy_amplitude");
+        optgroup->append_single_option_line("flow_weaving_xy_path_amplitude");
         optgroup->append_single_option_line("flow_weaving_period");
-        optgroup->append_single_option_line("flow_weaving_z_flow_tolerance");
-        optgroup->append_single_option_line("flow_weaving_z_fade_layers");
+        optgroup->append_single_option_line("flow_weaving_phase_offset");
+        optgroup->append_single_option_line("flow_weaving_z_phase_offset");
+        optgroup->append_single_option_line("flow_weaving_z_overlap");
+        optgroup->append_single_option_line("flow_weaving_top_taper_layers");
+        optgroup->append_single_option_line("flow_weaving_speed");
+        optgroup->append_single_option_line("flow_weaving_taper_length");
+        optgroup->append_single_option_line("flow_weaving_wall_overlap");
+        optgroup->append_single_option_line("flow_weaving_ironing");
+        optgroup->append_single_option_line("flow_weaving_ironing_speed");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");
@@ -2536,6 +2544,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("small_perimeter_speed", "speed_settings_other_layers_speed#small-perimeters");
         optgroup->append_single_option_line("small_perimeter_threshold", "speed_settings_other_layers_speed#small-perimeters-threshold");
         optgroup->append_single_option_line("sparse_infill_speed", "speed_settings_other_layers_speed#sparse-infill");
+        optgroup->append_single_option_line("flow_weaving_speed", "speed_settings_other_layers_speed#sparse-infill");
+        optgroup->append_single_option_line("flow_weaving_ironing_speed", "speed_settings_other_layers_speed#sparse-infill");
         optgroup->append_single_option_line("internal_solid_infill_speed", "speed_settings_other_layers_speed#internal-solid-infill");
         optgroup->append_single_option_line("top_surface_speed", "speed_settings_other_layers_speed#top-surface");
         optgroup->append_single_option_line("gap_infill_speed", "speed_settings_other_layers_speed#gap-infill");
@@ -2942,17 +2952,6 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
-}
-
-void TabPrint::update_custom_dirty(std::vector<std::string>& dirty_options, std::vector<std::string>& nonsys_options)
-{
-    // When Flow Weaving is active, density is forced to 100% for display.
-    // Don't mark it as dirty (no orange text, no reset arrow).
-    if (m_config->opt_enum<InfillPattern>("sparse_infill_pattern") == ipFlowWeaving) {
-        const std::string key = "sparse_infill_density";
-        dirty_options.erase(std::remove(dirty_options.begin(), dirty_options.end(), key), dirty_options.end());
-        nonsys_options.erase(std::remove(nonsys_options.begin(), nonsys_options.end(), key), nonsys_options.end());
-    }
 }
 
 //BBS: GUI refactor

@@ -613,7 +613,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
     auto completedimg = new wxStaticBitmap(m_panel_finish, wxID_ANY, create_scaled_bitmap("completed", m_panel_finish, 25), wxDefaultPosition, wxSize(imgsize, imgsize), 0);
     m_sizer_finish_h->Add(completedimg, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
 
-    m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
+    m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, _L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
     m_statictext_finish->Wrap(-1);
     m_statictext_finish->SetForegroundColour(wxColour(0, 150, 136));
     m_sizer_finish_h->Add(m_statictext_finish, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
@@ -1406,7 +1406,6 @@ bool SelectMachineDialog::is_nozzle_type_match(DevExtderSystem data, wxString& e
 
     vector<int> map_extruders = {1, 0};
 
-    // EXPERIMENTAL: skip-nozzle-type-sync
     // Query nozzle flow type directly by target machine index to avoid index-shifting/sizing bugs.
     // Compare non-localized English strings ("Standard" / "High Flow" / "TPU High Flow") to avoid false mismatches in localized UI.
     //Only when all preset nozzle types and machine nozzle types are exactly the same, return true.
@@ -1565,8 +1564,8 @@ void SelectMachineDialog::show_status(PrintDialogStatus status, std::vector<wxSt
         Enable_Send_Button(false);
     } else if (status == PrintDialogStatus::PrintStatusNozzleMatchInvalid) {
         Enable_Refresh_Button(true);
-        Enable_Send_Button(true);  // EXPERIMENTAL: skip-nozzle-type-sync - allow send despite flow type mismatch
-        /* ORIGINAL: Enable_Send_Button(false); */
+        // Orca: allow send despite nozzle flow-type mismatch (BBL hard-blocks; we downgrade to a warning)
+        Enable_Send_Button(true);
     } else if (status == PrintStatusNozzleDiameterMismatch) {
         Enable_Refresh_Button(true);
         Enable_Send_Button(false);
@@ -3389,8 +3388,7 @@ void SelectMachineDialog::update_show_status(MachineObject* obj_)
             std::vector<wxString> params{error_message};
             params.emplace_back(_L("Tips: If you changed your nozzle of your printer lately, Please go to 'Device -> Printer parts' to change your nozzle setting."));
             show_status(PrintDialogStatus::PrintStatusNozzleMatchInvalid, params);
-            // EXPERIMENTAL: skip-nozzle-type-sync - no return, downgraded to warning
-            /* ORIGINAL: return; */
+            // Orca: do not abort on flow-type mismatch; downgraded to a warning.
         }
     }
 
@@ -5201,12 +5199,7 @@ static wxString _get_tips(MachineObject* obj_)
     if (obj_->GetExtderSystem()->GetTotalExtderCount() == 1) {
         ext_diameter += format_nozzle_diameter(obj_->GetExtderSystem()->GetNozzleDiameter(0));
     } else if (obj_->GetExtderSystem()->GetTotalExtderCount() == 2) {
-        // EXPERIMENTAL: skip-nozzle-type-sync - show flow type labels next to diameters
-        /* ORIGINAL:
-        ext_diameter += format_nozzle_diameter(obj_->GetExtderSystem()->GetNozzleDiameter(1));//Left
-        ext_diameter += "/";
-        ext_diameter += format_nozzle_diameter(obj_->GetExtderSystem()->GetNozzleDiameter(0));
-        */
+        // Orca: append flow-type labels next to nozzle diameters.
         // Left nozzle (extruder id 1 = DEPUTY)
         ext_diameter += format_nozzle_diameter(obj_->GetExtderSystem()->GetNozzleDiameter(1));
         auto left_flow = obj_->GetExtderSystem()->GetNozzleFlowType(1);

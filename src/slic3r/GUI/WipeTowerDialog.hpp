@@ -67,4 +67,20 @@ private:
 	bool m_submit_flag{ false };
 };
 
+class StaticBox;
+
+// Ref: Adapted from BambuStudio's PurgeModeDialog (see src/slic3r/GUI/PurgeModeDialog.hpp in BBS)
+class PurgeModeDialog : public wxDialog
+{
+public:
+    PurgeModeDialog(wxWindow* parent, Slic3r::PrimeVolumeMode mode);
+    Slic3r::PrimeVolumeMode get_mode() const { return m_mode; }
+
+private:
+    Slic3r::PrimeVolumeMode m_mode;
+    StaticBox* m_standard_card = nullptr;
+    StaticBox* m_saving_card = nullptr;
+    void update_selection();
+};
+
 #endif  // _WIPE_TOWER_DIALOG_H_

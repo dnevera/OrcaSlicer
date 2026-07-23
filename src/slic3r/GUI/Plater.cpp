@@ -1,4 +1,6 @@
 #include "Plater.hpp"
+#include "libslic3r/VortekPlateMapping.hpp"
+#include "libslic3r/VortekNozzleState.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r_version.h"
 
@@ -637,6 +639,7 @@ struct Sidebar::priv
     wxStaticLine *              m_staticline1;
     StaticBox* m_panel_filament_title;
     wxStaticText* m_staticText_filament_settings;
+    wxStaticText* m_staticText_filament_count;
     ScalableButton *  m_bpButton_add_filament;
     ScalableButton *  m_bpButton_del_filament;
     ScalableButton *  m_bpButton_ams_filament;
@@ -648,6 +651,7 @@ struct Sidebar::priv
     wxPanel* m_panel_project_title;
     ScalableButton* m_filament_icon = nullptr;
     Button * m_flushing_volume_btn = nullptr;
+    Button * m_purge_mode_btn = nullptr;
     TextInput* m_search_item = nullptr;
     StaticBox* m_search_bar = nullptr;
     Search::SearchObjectDialog* dia = nullptr;
@@ -780,6 +784,16 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
     // Single nozzle & non ams
     panel_nozzle_dia->Show(!isDual && preset_bundle.get_printer_extruder_count() < 2);
     extruder_single_sizer->Show(false);
+
+    // ORCA ensure printer section is visible after changing printer from printer selection dialog
+    // this will inform user on printer change when printer section is collapsed
+    if (m_panel_printer_content){
+        bool isShown = m_panel_printer_content->IsShown();
+        if(!isShown && m_text_printer_settings){
+            m_text_printer_settings->SetLabel(_L("Printer")); // ensure title returns to default state
+            m_panel_printer_content->Show();
+        }
+    }
 }
 
 void Sidebar::priv::flush_printer_sync(bool restart)
@@ -1243,7 +1257,14 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
     combo_flow->GetDropDown().SetUseContentWidth(true);
     combo_flow->Bind(wxEVT_COMBOBOX, [this, index, combo_flow](wxCommandEvent &evt) {
         auto printer_tab = dynamic_cast<TabPrinter *>(wxGetApp().get_tab(Preset::TYPE_PRINTER));
-        printer_tab->set_extruder_volume_type(index, NozzleVolumeType(intptr_t(combo_flow->GetClientData(evt.GetInt()))));
+        MachineObject *obj = wxGetApp().getDeviceManager()->get_selected_machine();
+        bool main_on_left = obj ? obj->is_main_extruder_on_left() : false;
+        // Map physical UI widget index to logical extruder index (e.g. T0 on Right / T1 on Left for H2C)
+        int logical_index = index;
+        if (index >= 0 && !main_on_left) {
+            logical_index = 1 - index;
+        }
+        printer_tab->set_extruder_volume_type(logical_index, NozzleVolumeType(intptr_t(combo_flow->GetClientData(evt.GetInt()))));
         if (GUI::wxGetApp().plater())
             GUI::wxGetApp().plater()->update_machine_sync_status();
     });
@@ -1263,7 +1284,13 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
 #endif
         btn_edit->Hide();
         btn_edit->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this, index](auto &evt) {
-            PopupWindow *window = new AMSCountPopupWindow(this, index);
+            MachineObject *obj = wxGetApp().getDeviceManager()->get_selected_machine();
+            bool main_on_left = obj ? obj->is_main_extruder_on_left() : false;
+            int logical_index = index;
+            if (index >= 0 && !main_on_left) {
+                logical_index = 1 - index;
+            }
+            PopupWindow *window = new AMSCountPopupWindow(this, logical_index);
             auto         size   = GetSize();
             auto         pos    = ClientToScreen({0, size.y + 12});
             size.SetWidth(size.GetWidth() + FromDIP(10));
@@ -1779,7 +1806,7 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
         } else if (select_type) {
             target_type = *select_type;
         }
-        target_types[index] = target_type;
+        target_types[extruder_id] = target_type;
     }
 
     int deputy_4 = 0, main_4 = 0, deputy_1 = 0, main_1 = 0;
@@ -1798,22 +1825,22 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
         }
     }
     only_external_material = !obj->GetFilaSystem()->HasAms();
-    int main_index = obj->is_main_extruder_on_left() ? 0 : 1;
-    int deputy_index = obj->is_main_extruder_on_left() ? 1 : 0;
+    int left_logical_idx  = obj->is_main_extruder_on_left() ? 0 : 1;
+    int right_logical_idx = obj->is_main_extruder_on_left() ? 1 : 0;
 
     if (extruder_nums > 1) {
-        int left_index  = left_extruder->combo_diameter->FindString(get_diameter_string(nozzle_diameters[0]));
-        int right_index = right_extruder->combo_diameter->FindString(get_diameter_string(nozzle_diameters[1]));
+        int left_index  = left_extruder->combo_diameter->FindString(get_diameter_string(nozzle_diameters[left_logical_idx]));
+        int right_index = right_extruder->combo_diameter->FindString(get_diameter_string(nozzle_diameters[right_logical_idx]));
         assert(left_index != -1 && right_index != -1);
         left_extruder->combo_diameter->SetSelection(left_index);
         right_extruder->combo_diameter->SetSelection(right_index);
         is_switching_diameter = true;
         switch_diameter(false);
         is_switching_diameter = false;
-        AMSCountPopupWindow::SetAMSCount(deputy_index, deputy_4, deputy_1);
-        AMSCountPopupWindow::SetAMSCount(main_index, main_4, main_1);
-        AMSCountPopupWindow::UpdateAMSCount(0, left_extruder);
-        AMSCountPopupWindow::UpdateAMSCount(1, right_extruder);
+        AMSCountPopupWindow::SetAMSCount(0, main_4, main_1);
+        AMSCountPopupWindow::SetAMSCount(1, deputy_4, deputy_1);
+        AMSCountPopupWindow::UpdateAMSCount(left_logical_idx, left_extruder);
+        AMSCountPopupWindow::UpdateAMSCount(right_logical_idx, right_extruder);
     } else {
         int index = single_extruder->combo_diameter->FindString(get_diameter_string(nozzle_diameters[0]));
         assert(index != -1);
@@ -1839,8 +1866,8 @@ bool Sidebar::priv::sync_extruder_list(bool &only_external_material, bool is_man
                 }
             }
         };
-        select_flow(left_extruder, target_types[0]);
-        select_flow(right_extruder, target_types.size() > 1 ? target_types[1] : NozzleVolumeType::nvtStandard);
+        select_flow(left_extruder, target_types[left_logical_idx]);
+        select_flow(right_extruder, target_types.size() > 1 ? target_types[right_logical_idx] : NozzleVolumeType::nvtStandard);
     }
 
     // Update FTS separator icon
@@ -2038,6 +2065,9 @@ void Sidebar::priv::update_sync_status(const MachineObject *obj)
         extruder_infos[0].diameter = float(value);
     }
     else if(extruder_nums == 2){
+        // Resolve logical index for Left and Right UI widgets depending on printer layout (Main on Left vs Right)
+        int left_logical_idx  = obj->is_main_extruder_on_left() ? 0 : 1;
+        int right_logical_idx = obj->is_main_extruder_on_left() ? 1 : 0;
         // Read nozzle diameter from preset config directly
         // (UI wxStrings may be locale-dependent or uninitialized)
         auto *nozzle_diam_opt = preset_bundle->printers.get_edited_preset().config.option<ConfigOptionFloats>("nozzle_diameter");
@@ -2047,11 +2077,11 @@ void Sidebar::priv::update_sync_status(const MachineObject *obj)
         } else {
             double value = 0.0;
             left_extruder->diameter.ToDouble(&value);
-            extruder_infos[0].diameter = float(value);
+            extruder_infos[left_logical_idx].diameter = float(value);
         
             value = 0.0;
             right_extruder->diameter.ToDouble(&value);
-            extruder_infos[1].diameter = float(value);
+            extruder_infos[right_logical_idx].diameter = float(value);
         }
     }
 
@@ -2076,8 +2106,6 @@ void Sidebar::priv::update_sync_status(const MachineObject *obj)
         }
     }
 
-    std::reverse(machine_extruder_infos.begin(), machine_extruder_infos.end());
-
     std::vector<bool> extruder_synced(extruder_nums, false);
     if (extruder_nums == 1) {
         if (is_same_nozzle_info(extruder_infos[0], machine_extruder_infos[0])) {
@@ -2093,52 +2121,32 @@ void Sidebar::priv::update_sync_status(const MachineObject *obj)
         }
     }
     else if (extruder_nums == 2) {
-        // EXPERIMENTAL: skip-nozzle-type-sync - decouple AMS display from nozzle type comparison
-        // AMS icons shown when diameter+AMS counts match; badge requires full equality incl. nozzle type
-        /* ORIGINAL:
-        if (extruder_infos[0] == machine_extruder_infos[0]) {
-            left_extruder->ShowBadge(true);
-            left_extruder->sync_ams(obj, machine_extruder_infos[0].ams_v4, machine_extruder_infos[0].ams_v1);
-            extruder_synced[0] = true;
-        }
-        else {
-            left_extruder->ShowBadge(false);
-            left_extruder->sync_ams(obj, {}, {});
-        }
+        int left_logical_idx  = obj->is_main_extruder_on_left() ? 0 : 1;
+        int right_logical_idx = obj->is_main_extruder_on_left() ? 1 : 0;
 
-        if (extruder_infos[1] == machine_extruder_infos[1]) {
-            right_extruder->ShowBadge(true);
-            right_extruder->sync_ams(obj, machine_extruder_infos[1].ams_v4, machine_extruder_infos[1].ams_v1);
-            extruder_synced[1] = true;
-        }
-        else {
-            right_extruder->ShowBadge(false);
-            right_extruder->sync_ams(obj, {}, {});
-        }
-        */
         auto is_same_ams = [](const ExtruderInfo &a, const ExtruderInfo &b) {
             return abs(a.diameter - b.diameter) < EPSILON
                 && a.ams_4 == b.ams_4
                 && a.ams_1 == b.ams_1;
         };
 
-        bool left_fully_synced = (extruder_infos[0] == machine_extruder_infos[0]);
+        bool left_fully_synced = (extruder_infos[left_logical_idx] == machine_extruder_infos[left_logical_idx]);
         left_extruder->ShowBadge(left_fully_synced);
-        if (is_same_ams(extruder_infos[0], machine_extruder_infos[0])) {
-            left_extruder->sync_ams(obj, machine_extruder_infos[0].ams_v4, machine_extruder_infos[0].ams_v1);
+        if (is_same_ams(extruder_infos[left_logical_idx], machine_extruder_infos[left_logical_idx])) {
+            left_extruder->sync_ams(obj, machine_extruder_infos[left_logical_idx].ams_v4, machine_extruder_infos[left_logical_idx].ams_v1);
         } else {
             left_extruder->sync_ams(obj, {}, {});
         }
-        extruder_synced[0] = left_fully_synced;
+        extruder_synced[left_logical_idx] = left_fully_synced;
 
-        bool right_fully_synced = (extruder_infos[1] == machine_extruder_infos[1]);
+        bool right_fully_synced = (extruder_infos[right_logical_idx] == machine_extruder_infos[right_logical_idx]);
         right_extruder->ShowBadge(right_fully_synced);
-        if (is_same_ams(extruder_infos[1], machine_extruder_infos[1])) {
-            right_extruder->sync_ams(obj, machine_extruder_infos[1].ams_v4, machine_extruder_infos[1].ams_v1);
+        if (is_same_ams(extruder_infos[right_logical_idx], machine_extruder_infos[right_logical_idx])) {
+            right_extruder->sync_ams(obj, machine_extruder_infos[right_logical_idx].ams_v4, machine_extruder_infos[right_logical_idx].ams_v1);
         } else {
             right_extruder->sync_ams(obj, {}, {});
         }
-        extruder_synced[1] = right_fully_synced;
+        extruder_synced[right_logical_idx] = right_fully_synced;
     }
 
     StateColor synced_colour(std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Normal));
@@ -2222,7 +2230,7 @@ Sidebar::Sidebar(Plater *parent)
         p->m_panel_printer_title->SetBackgroundColor2(0xF1F1F1);
 
         p->m_printer_icon = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "printer");
-        p->m_text_printer_settings = new Label(p->m_panel_printer_title, _L("Printer"), LB_PROPAGATE_MOUSE_EVENT);
+        p->m_text_printer_settings = new Label(p->m_panel_printer_title, _L("Printer"), LB_PROPAGATE_MOUSE_EVENT | wxST_ELLIPSIZE_END);
 
         p->m_printer_icon->Bind(wxEVT_BUTTON, [this](wxCommandEvent& e) {
             //auto wizard_t = new ConfigWizard(wxGetApp().mainframe);
@@ -2255,8 +2263,8 @@ Sidebar::Sidebar(Plater *parent)
         wxBoxSizer* h_sizer_title = new wxBoxSizer(wxHORIZONTAL);
         h_sizer_title->Add(p->m_printer_icon, 0, wxALIGN_CENTRE | wxLEFT, FromDIP(SidebarProps::TitlebarMargin()));
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
-        h_sizer_title->Add(p->m_text_printer_settings, 0, wxALIGN_CENTER);
-        h_sizer_title->AddStretchSpacer();
+        h_sizer_title->Add(p->m_text_printer_settings, 1, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
+        //h_sizer_title->AddStretchSpacer();
         h_sizer_title->Add(p->m_printer_connect , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_bbl_sync, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_setting, 0, wxALIGN_CENTER);
@@ -2275,7 +2283,13 @@ Sidebar::Sidebar(Plater *parent)
         // add printer title
         scrolled_sizer->Add(p->m_panel_printer_title, 0, wxEXPAND | wxALL, 0);
         p->m_panel_printer_title->Bind(wxEVT_LEFT_UP, [this] (auto & e) {
-            p->m_panel_printer_content->Show(!p->m_panel_printer_content->IsShown());
+            if (!p || !p->combo_printer || !p->m_text_printer_settings || !p->m_panel_printer_content || !m_scrolled_sizer)
+                return;
+            // ORCA Show printer name on title when its folded to inform user without expanding it again
+            bool     isShown = p->m_panel_printer_content->IsShown();
+            wxString title   = _L("Printer") + wxString(!isShown ? "" : ("  |  " + p->combo_printer->GetValue()));
+            p->m_text_printer_settings->SetLabel(title);
+            p->m_panel_printer_content->Show(!isShown);
             m_scrolled_sizer->Layout();
         });
 
@@ -2639,11 +2653,17 @@ Sidebar::Sidebar(Plater *parent)
     p->m_panel_filament_title->SetBackgroundColor(title_bg);
     p->m_panel_filament_title->SetBackgroundColor2(0xF1F1F1);
     p->m_panel_filament_title->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &e) {
-        if (e.GetPosition().x > (p->m_flushing_volume_btn->IsShown()
-                ? p->m_flushing_volume_btn->GetPosition().x : (p->m_bpButton_add_filament->GetPosition().x - FromDIP(30)))) // ORCA exclude area of del button from titlebar collapse/expand feature to fix undesired collapse when user spams del filament button 
+        int limit_x = p->m_bpButton_add_filament->GetPosition().x - FromDIP(30);
+        if (p->m_flushing_volume_btn && p->m_flushing_volume_btn->IsShown())
+            limit_x = std::min(limit_x, p->m_flushing_volume_btn->GetPosition().x);
+        if (p->m_purge_mode_btn && p->m_purge_mode_btn->IsShown())
+            limit_x = std::min(limit_x, p->m_purge_mode_btn->GetPosition().x);
+        if (e.GetPosition().x > limit_x)
             return;
         p->m_panel_filament_content->Show(!p->m_panel_filament_content->IsShown());
         m_scrolled_sizer->Layout();
+
+        CallAfter([this]{update_filaments_counter(true);}); // call after all UI processing done
     });
 
     wxBoxSizer* bSizer39;
@@ -2651,10 +2671,12 @@ Sidebar::Sidebar(Plater *parent)
     p->m_filament_icon = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "filament");
     p->m_staticText_filament_settings = new Label(p->m_panel_filament_title, _L("Project Filaments"), LB_PROPAGATE_MOUSE_EVENT);
     bSizer39->Add(p->m_filament_icon, 0, wxALIGN_CENTER | wxLEFT, FromDIP(SidebarProps::TitlebarMargin()));
-    bSizer39->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
-    bSizer39->Add( p->m_staticText_filament_settings, 0, wxALIGN_CENTER );
-    bSizer39->Add(FromDIP(10), 0, 0, 0, 0);
+    bSizer39->Add(p->m_staticText_filament_settings, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
     bSizer39->SetMinSize(-1, FromDIP(30));
+
+    p->m_staticText_filament_count = new Label(p->m_panel_filament_title, "(0)", LB_PROPAGATE_MOUSE_EVENT);
+    bSizer39->Add(p->m_staticText_filament_count, 0, wxALIGN_CENTER );
+    bSizer39->Add(FromDIP(10), 0, 0, 0, 0);
 
     p->m_panel_filament_title->SetSizer( bSizer39 );
     p->m_panel_filament_title->Layout();
@@ -2671,6 +2693,26 @@ Sidebar::Sidebar(Plater *parent)
     // BBS
     // add wiping dialog
     //wiping_dialog_button->SetFont(wxGetApp().normal_font());
+    p->m_purge_mode_btn = new Button(p->m_panel_filament_title, _L("Purge mode"));
+    p->m_purge_mode_btn->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
+    p->m_purge_mode_btn->SetId(wxID_ANY);
+    p->m_purge_mode_btn->Bind(wxEVT_BUTTON, [parent, this](wxCommandEvent &e) {
+        auto& project_config = wxGetApp().preset_bundle->project_config;
+        auto current_mode = project_config.opt_enum<PrimeVolumeMode>("prime_volume_mode");
+        PurgeModeDialog dlg(parent, current_mode);
+        if (dlg.ShowModal() == wxID_OK) {
+            project_config.set_key_value("prime_volume_mode", new ConfigOptionEnum<PrimeVolumeMode>(dlg.get_mode()));
+            wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
+            wxGetApp().plater()->update_project_dirty_from_presets();
+            wxPostEvent(parent, SimpleEvent(EVT_SCHEDULE_BACKGROUND_PROCESS, parent));
+            p->plater->get_view3D_canvas3D()->reload_scene(true);
+            p->plater->update();
+        }
+    });
+
+    bSizer39->Add(p->m_purge_mode_btn, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
+    bSizer39->Hide(p->m_purge_mode_btn); // Ensure hidden by default on launch
+
     p->m_flushing_volume_btn = new Button(p->m_panel_filament_title, _L("Flushing volumes"));
     p->m_flushing_volume_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Compact);
     p->m_flushing_volume_btn->SetId(wxID_RESET);
@@ -2690,6 +2732,7 @@ Sidebar::Sidebar(Plater *parent)
     add_btn->SetToolTip(_L("Add one filament"));
     add_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent& e){
         add_filament();
+        update_filaments_counter();
     });
     p->m_bpButton_add_filament = add_btn;
 
@@ -2699,6 +2742,7 @@ Sidebar::Sidebar(Plater *parent)
     del_btn->SetToolTip(_L("Remove last filament"));
     del_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
         delete_filament();
+        update_filaments_counter();
     });
     p->m_bpButton_del_filament = del_btn;
 
@@ -3270,15 +3314,21 @@ void Sidebar::update_presets(Preset::Type preset_type)
             };
 
             std::string printer_type = printer_preset.get_printer_type(wxGetApp().preset_bundle);
-            p->left_extruder->SetTitle(_L(DevPrinterConfigUtil::get_toolhead_display_name(printer_type, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase)));
-            p->right_extruder->SetTitle(_L(DevPrinterConfigUtil::get_toolhead_display_name(printer_type, MAIN_EXTRUDER_ID, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase)));
-            AMSCountPopupWindow::UpdateAMSCount(0, p->left_extruder);
-            AMSCountPopupWindow::UpdateAMSCount(1, p->right_extruder);
-            update_extruder_variant(*p->left_extruder, 0);
-            update_extruder_variant(*p->right_extruder, 1);
+            MachineObject *obj = wxGetApp().getDeviceManager()->get_selected_machine();
+            bool main_on_left = obj ? obj->is_main_extruder_on_left() : false;
+            // Map physical Left/Right sidebar widgets to logical extruder IDs dynamically
+            int left_logical_idx = main_on_left ? 0 : 1;
+            int right_logical_idx = main_on_left ? 1 : 0;
+
+            p->left_extruder->SetTitle(_L(DevPrinterConfigUtil::get_toolhead_display_name(printer_type, left_logical_idx, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase)));
+            p->right_extruder->SetTitle(_L(DevPrinterConfigUtil::get_toolhead_display_name(printer_type, right_logical_idx, ToolHeadComponent::Nozzle, ToolHeadNameCase::TitleCase)));
+            AMSCountPopupWindow::UpdateAMSCount(left_logical_idx, p->left_extruder);
+            AMSCountPopupWindow::UpdateAMSCount(right_logical_idx, p->right_extruder);
+            update_extruder_variant(*p->left_extruder, left_logical_idx);
+            update_extruder_variant(*p->right_extruder, right_logical_idx);
             //if (!p->is_switching_diameter) {
-                update_extruder_diameter(0, *p->left_extruder);
-                update_extruder_diameter(1, *p->right_extruder);
+                update_extruder_diameter(left_logical_idx, *p->left_extruder);
+                update_extruder_diameter(right_logical_idx, *p->right_extruder);
             //}
             p->image_printer_bed->SetBitmap(create_scaled_bitmap(image_path, this, PRINTER_THUMBNAIL_SIZE.GetHeight()));
         } else {
@@ -3465,6 +3515,26 @@ void Sidebar::update_filaments_area_height()
     if (min_size.y > p->m_panel_filament_content->GetMaxHeight())
         min_size.y = p->m_panel_filament_content->GetMaxHeight();
     p->m_panel_filament_content->SetMinSize({-1, min_size.y});
+
+    update_filaments_counter();
+}
+
+void Sidebar::update_filaments_counter(bool force_layout)
+// ORCA
+{
+    int  current_count       = p->combos_filament.size();
+    int  preferred_count     = std::stoi(wxGetApp().app_config->get("filaments_area_preferred_count"));
+    bool isShown             = p->m_panel_filament_content->IsShown();
+    auto counter             = p->m_staticText_filament_count;
+
+    counter->SetLabel("(" + std::to_string(current_count) + ")"); // update counter on every change
+    if(current_count > preferred_count || !isShown)
+        counter->Show();
+    else if (isShown) // hide when list is visible and short enough
+        counter->Hide();
+
+    if(force_layout)
+        m_scrolled_sizer->Layout();
 }
 
 void Sidebar::msw_rescale()
@@ -3511,6 +3581,8 @@ void Sidebar::msw_rescale()
     p->m_bpButton_del_filament->msw_rescale();
     p->m_bpButton_ams_filament->msw_rescale();
     p->m_bpButton_set_filament->msw_rescale();
+    if (p->m_purge_mode_btn)
+        p->m_purge_mode_btn->Rescale();
     p->m_flushing_volume_btn->Rescale();
     set_flushing_volume_warning(is_flush_config_modified()); // ORCA reapply appearance
 
@@ -3596,6 +3668,8 @@ void Sidebar::sys_color_changed()
     p->m_bpButton_del_filament->msw_rescale();
     p->m_bpButton_ams_filament->msw_rescale();
     p->m_bpButton_set_filament->msw_rescale();
+    if (p->m_purge_mode_btn)
+        p->m_purge_mode_btn->Rescale();
     p->m_flushing_volume_btn->Rescale();
     set_flushing_volume_warning(is_flush_config_modified()); // ORCA reapply appearance
 
@@ -3772,6 +3846,13 @@ void Sidebar::add_filament() {
     if (p->combos_filament.size() >= MAXIMUM_EXTRUDER_NUMBER) return;
     wxColour    new_col        = Plater::get_next_color_for_filament();
     add_custom_filament(new_col);
+
+    auto filament_list = p->m_panel_filament_content;
+    if(!filament_list->IsShown()){
+        filament_list->Show(); // ORCA show list if its folded
+        m_scrolled_sizer->Layout();
+    }
+    filament_list->Scroll(-1, INT_MAX); // ORCA scroll to end of list on changes to inform user about filament count
 }
 
 void Sidebar::delete_filament(size_t filament_id, int replace_filament_id) {
@@ -3804,6 +3885,14 @@ void Sidebar::delete_filament(size_t filament_id, int replace_filament_id) {
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
 
     wxGetApp().plater()->update();
+
+    auto filament_list = p->m_panel_filament_content;
+    if(!filament_list->IsShown()){
+        filament_list->Show(); // ORCA show list if its folded
+        m_scrolled_sizer->Layout();
+    }
+
+    filament_list->Scroll(-1, INT_MAX); // ORCA scroll to end of list on changes to inform user about filament count
 }
 
 void Sidebar::change_filament(size_t from_id, size_t to_id)
@@ -4338,7 +4427,7 @@ bool Sidebar::should_show_SEMM_buttons()
 void Sidebar::show_SEMM_buttons()
 {
     // ORCA
-    if (!p || p->combos_filament.empty() || !p->m_bpButton_add_filament || !p->m_bpButton_del_filament || !p->m_flushing_volume_btn)
+    if (!p || p->combos_filament.empty() || !p->m_bpButton_add_filament || !p->m_bpButton_del_filament || !p->m_flushing_volume_btn || !p->m_purge_mode_btn)
         return;
     
     bool is_multi_material = p->combos_filament.size() > 1;
@@ -4350,6 +4439,8 @@ void Sidebar::show_SEMM_buttons()
     p->m_bpButton_add_filament->Show(single_or_bbl);
     p->m_bpButton_del_filament->Show(is_multi);
     p->m_flushing_volume_btn->Show(  is_multi);
+    bool is_bbl_vendor = wxGetApp().preset_bundle->is_bbl_vendor();
+    p->m_purge_mode_btn->Show(is_multi && is_bbl_vendor);
 
     if (is_multi) {
         for (auto &c : p->combos_filament)
@@ -6883,12 +6974,12 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << " " << boost::format("%1%: %2%")%it->first %it->second;
                             //
                             NotificationManager *notify_manager = q->get_notification_manager();
-                            std::string error_message = L("Invalid values found in the 3MF:");
+                            std::string error_message = _u8L("Invalid values found in the 3MF:");
                             error_message += "\n";
                             for (std::map<std::string, std::string>::iterator it=validity.begin(); it!=validity.end(); ++it)
                                 error_message += "-" + it->first + ": " + it->second + "\n";
                             error_message += "\n";
-                            error_message += L("Please correct them in the param tabs");
+                            error_message += _u8L("Please correct them in the param tabs");
                             notify_manager->bbl_show_3mf_warn_notification(error_message);
                         }
                     }
@@ -7105,17 +7196,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                         filament_map->values.resize(filament_count, 1);
                                     }
 
-                                    // H2C Vortek: Sync filament nozzle map
-                                    ConfigOptionInts* filament_nozzle_map = proj_cfg.opt<ConfigOptionInts>("filament_nozzle_map", true);
-                                    if (filament_nozzle_map->size() != filament_count) {
-                                        filament_nozzle_map->values.resize(filament_count, 0);
-                                    }
-
-                                    // H2C Vortek: Sync filament volume map
-                                    ConfigOptionInts* filament_volume_map = proj_cfg.opt<ConfigOptionInts>("filament_volume_map", true);
-                                    if (filament_volume_map->size() != filament_count) {
-                                        filament_volume_map->values.resize(filament_count, 0);
-                                    }
+                                    Vortek::PlateMapping::sync_project_config_on_load(proj_cfg, filament_count);
 
                                     // Sync filament multi colour
                                     ConfigOptionStrings* filament_multi_color = proj_cfg.opt<ConfigOptionStrings>("filament_multi_colour", true);
@@ -8598,6 +8679,32 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
         invalidated = background_process.apply(this->model, preset_bundle->full_config(false, f_maps));
         background_process.fff_print()->set_extruder_filament_info(get_extruder_filament_info());
+        // H2C: Sync physical nozzle colors → preset filament mapping via Vortek::NozzleState
+        {
+            std::unordered_map<int, std::string> device_nozzle_colors;
+            DeviceManager *dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+            if (dev) {
+                MachineObject *obj_ = dev->get_selected_machine();
+                if (obj_ && obj_->is_multi_extruders()) {
+                    auto* nozzle_system = obj_->GetNozzleSystem();
+                    if (nozzle_system) {
+                        for (const auto& [id, nozzle] : nozzle_system->GetExtNozzles()) {
+                            auto clr = nozzle.GetFilamentColor();
+                            if (!clr.empty())
+                                device_nozzle_colors[id] = clr;
+                        }
+                    }
+                }
+            }
+            if (!device_nozzle_colors.empty()) {
+                auto preset_colors = background_process.fff_print()->config().filament_colour.values;
+                auto nozzle_map = Vortek::NozzleState::match_nozzle_colors_to_filaments(
+                    device_nozzle_colors, preset_colors);
+                background_process.fff_print()->set_device_nozzle_status(nozzle_map);
+            } else {
+                background_process.fff_print()->set_device_nozzle_status({});
+            }
+        }
     }
     else
         invalidated = background_process.apply(this->model, preset_bundle->full_config(false));
@@ -11685,22 +11792,17 @@ bool Plater::priv::check_ams_status_impl(bool is_slice_all)
             }
         }
 
-        int left_4  = main_4;
-        int left_1  = main_1;
-        int right_4 = deputy_4;
-        int right_1 = deputy_1;
-        if (!obj->is_main_extruder_on_left()) {
-            left_4  = deputy_4;
-            left_1  = deputy_1;
-            right_4 = main_4;
-            right_1 = main_1;
-        }
-
         if (!preset_bundle->extruder_ams_counts.empty() && !preset_bundle->extruder_ams_counts.front().empty()) {
-            is_same_as_printer &= preset_bundle->extruder_ams_counts[0][4] == left_4
-            && preset_bundle->extruder_ams_counts[0][1] == left_1
-            && preset_bundle->extruder_ams_counts[1][4] == right_4
-            && preset_bundle->extruder_ams_counts[1][1] == right_1;
+            // Direct logical-to-logical comparison of AMS counts (index 0 is Main/logical 0, index 1 is Deputy/logical 1)
+            if (preset_bundle->extruder_ams_counts.size() >= 2) {
+                is_same_as_printer &= preset_bundle->extruder_ams_counts[0][4] == main_4
+                && preset_bundle->extruder_ams_counts[0][1] == main_1
+                && preset_bundle->extruder_ams_counts[1][4] == deputy_4
+                && preset_bundle->extruder_ams_counts[1][1] == deputy_1;
+            } else {
+                is_same_as_printer &= preset_bundle->extruder_ams_counts[0][4] == main_4
+                && preset_bundle->extruder_ams_counts[0][1] == main_1;
+            }
         }
 
         if (!is_same_as_printer) {
@@ -16238,6 +16340,7 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     publish(p->model, strategy);
 
     DynamicPrintConfig cfg = wxGetApp().preset_bundle->full_config_secure();
+    Vortek::PlateMapping::patch_export_config(cfg); // H2C: FTS flag
     const std::string path_u8 = into_u8(path);
     wxBusyCursor wait;
 

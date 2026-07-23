@@ -40,6 +40,7 @@
 #include "format.hpp"
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/Utils/FileHelp.hpp"
+#include "libslic3r/VortekPlateMapping.hpp"
 #include <imgui/imgui_internal.h>
 #include <wx/dcgraph.h>
 using boost::optional;
@@ -3806,9 +3807,7 @@ void PartPlate::set_filament_map_mode(const FilamentMapMode& mode)
 
     if (old_real_mode != new_real_mode) {
         clear_filament_map();
-        // H2C Vortek: Clear nozzle and volume maps when filament mapping mode changes
-        clear_filament_nozzle_map();
-        clear_filament_volume_map();
+        Vortek::PlateMapping::clear_mappings(&m_config);
     }
     if (mode == fmmDefault)
         clear_filament_map_mode();
@@ -3898,15 +3897,7 @@ void PartPlate::set_filament_count(int filament_count)
         std::vector<int>& filament_maps = m_config.option<ConfigOptionInts>("filament_map")->values;
         filament_maps.resize(filament_count, 1);
     }
-    // H2C Vortek: Resize nozzle and volume maps to match new filament count
-    if (m_config.has("filament_nozzle_map")) {
-        std::vector<int>& filament_nozzle_maps = m_config.option<ConfigOptionInts>("filament_nozzle_map")->values;
-        filament_nozzle_maps.resize(filament_count, 0);
-    }
-    if (m_config.has("filament_volume_map")) {
-        std::vector<int>& filament_volume_maps = m_config.option<ConfigOptionInts>("filament_volume_map")->values;
-        filament_volume_maps.resize(filament_count, 0);
-    }
+    Vortek::PlateMapping::handle_filament_count_changed(&m_config, filament_count);
 }
 
 void PartPlate::on_filament_added()
@@ -3915,15 +3906,7 @@ void PartPlate::on_filament_added()
         std::vector<int>& filament_maps = m_config.option<ConfigOptionInts>("filament_map")->values;
         filament_maps.push_back(1);
     }
-    // H2C Vortek: Grow nozzle and volume maps when a filament is added
-    if (m_config.has("filament_nozzle_map")) {
-        std::vector<int>& filament_nozzle_maps = m_config.option<ConfigOptionInts>("filament_nozzle_map")->values;
-        filament_nozzle_maps.push_back(0);
-    }
-    if (m_config.has("filament_volume_map")) {
-        std::vector<int>& filament_volume_maps = m_config.option<ConfigOptionInts>("filament_volume_map")->values;
-        filament_volume_maps.push_back(0);
-    }
+    Vortek::PlateMapping::handle_filament_added(&m_config);
 }
 
 void PartPlate::on_filament_deleted(int filament_count, int filament_id)
@@ -3936,17 +3919,7 @@ void PartPlate::on_filament_deleted(int filament_count, int filament_id)
         if (filament_id >= 0 && filament_id < (int) filament_maps.size())
             filament_maps.erase(filament_maps.begin() + filament_id);
     }
-    // H2C Vortek: Erase corresponding indices from nozzle and volume maps when a filament is deleted
-    if (m_config.has("filament_nozzle_map")) {
-        std::vector<int>& filament_nozzle_maps = m_config.option<ConfigOptionInts>("filament_nozzle_map")->values;
-        if (filament_id >= 0 && filament_id < (int) filament_nozzle_maps.size())
-            filament_nozzle_maps.erase(filament_nozzle_maps.begin() + filament_id);
-    }
-    if (m_config.has("filament_volume_map")) {
-        std::vector<int>& filament_volume_maps = m_config.option<ConfigOptionInts>("filament_volume_map")->values;
-        if (filament_id >= 0 && filament_id < (int) filament_volume_maps.size())
-            filament_volume_maps.erase(filament_volume_maps.begin() + filament_id);
-    }
+    Vortek::PlateMapping::handle_filament_deleted(&m_config, filament_id);
     update_first_layer_print_sequence_when_delete_filament(filament_id);
 }
 
@@ -6239,6 +6212,10 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
                     plate_data_item->filament_change_sequence = m_plate_list[i]->m_gcode_result->filament_change_sequence;
                     plate_data_item->nozzle_change_sequence   = m_plate_list[i]->m_gcode_result->nozzle_change_sequence;
                     plate_data_item->optimal_assignment       = m_plate_list[i]->m_gcode_result->optimal_assignment;
+                    // Propagate nozzle group result so slice_info.config serialization
+                    // can write per-nozzle entries (grouping filaments by physical nozzles).
+                    if (m_plate_list[i]->m_gcode_result->nozzle_group_result)
+                        plate_data_item->nozzle_group_result = *m_plate_list[i]->m_gcode_result->nozzle_group_result;
                     plate_data_item->first_layer_time         = std::to_string(m_plate_list[i]->cali_bboxes_data.first_layer_time);
                     Print* print                              = nullptr;
                     m_plate_list[i]->get_print((PrintBase**) &print, nullptr, nullptr);
@@ -6254,6 +6231,16 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
                     }
                     // parse filament info
                     plate_data_item->parse_filament_info(m_plate_list[i]->get_slice_result(), print ? &print->full_print_config() : nullptr);
+                    // H2C Vortek: patch nozzle group data for correct slice_info.config serialization.
+                    // This bypasses the fragile upstream nozzle_group_result pipeline and writes
+                    // nozzles_info + FilamentInfo::group_id directly from plate carousel mapping.
+                    if (print)
+                        Vortek::PlateMapping::patch_plate_data_for_export(
+                            plate_data_item,
+                            m_plate_list[i]->get_filament_nozzle_maps(),
+                            m_plate_list[i]->get_filament_volume_maps(),
+                            m_plate_list[i]->get_filament_maps(),
+                            print->full_print_config(), print);
                 } else {
                     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "slice result = " << m_plate_list[i]->get_slice_result()
                                             << ", result valid = " << m_plate_list[i]->is_slice_result_valid();
@@ -6374,89 +6361,13 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
             }
         }
 
-        // H2C Vortek: Load nozzle mapping and properties from 3MF structure into PartPlate
-        auto parse_values = [](const std::string& value, const char* seps, auto to_value) {
-            using T = decltype(to_value(std::string()));
-            std::vector<T> result;
-            if (value.empty()) {
-                return result;
-            }
-            std::vector<std::string> tokens;
-            boost::split(tokens, value, boost::is_any_of(seps), boost::token_compress_on);
-            for (const auto& token : tokens) {
-                if (token.empty()) {
-                    continue;
-                }
-                try {
-                    result.emplace_back(to_value(token));
-                } catch (...) {}
-            }
-            return result;
-        };
-
-        std::vector<int> nozzle_volume_type_values = parse_values(plate_data_list[i]->nozzle_volume_types, " ",
-                                                                  [](const std::string& token) { return std::stoi(token); });
-
-        std::vector<double> nozzle_diameter_values = parse_values(plate_data_list[i]->nozzle_diameters, " ,",
-                                                                  [](const std::string& token) { return std::stod(token); });
-
-        std::vector<NozzleVolumeType> extruder_volume_types(nozzle_volume_type_values.size(), NozzleVolumeType::nvtStandard);
-        std::vector<double> nozzle_diameters(nozzle_diameter_values.size(), 0.0);
-
-        if (!nozzle_volume_type_values.empty()) {
-            for (size_t idx = 0; idx < nozzle_volume_type_values.size(); ++idx) {
-                if (nozzle_volume_type_values[idx] >= 0) {
-                    extruder_volume_types[idx] = static_cast<NozzleVolumeType>(nozzle_volume_type_values[idx]);
-                }
-            }
-        }
-        if (!nozzle_diameter_values.empty()) {
-            for (size_t idx = 0; idx < nozzle_diameter_values.size(); ++idx) {
-                if (nozzle_diameter_values[idx] > 0) {
-                    nozzle_diameters[idx] = nozzle_diameter_values[idx];
-                }
-            }
-        }
-
-        auto nozzle_infos = MultiNozzleUtils::load_nozzle_infos_with_compatibility(plate_data_list[i]->nozzles_info,
-                                                                                   plate_data_list[i]->slice_filaments_info,
-                                                                                   plate_data_list[i]->filament_maps, extruder_volume_types,
-                                                                                   nozzle_diameter_values);
-
-        std::vector<unsigned int> used_fils;
-        for (const auto& fil : plate_data_list[i]->slice_filaments_info) {
-            if (fil.used_for_object || fil.used_for_support) {
-                used_fils.push_back(static_cast<unsigned int>(fil.id));
-            }
-        }
-        std::sort(used_fils.begin(), used_fils.end());
-        used_fils.erase(std::unique(used_fils.begin(), used_fils.end()), used_fils.end());
-        if (used_fils.empty()) {
-            for (int f_id = 0; f_id < filament_count; ++f_id) {
-                used_fils.push_back(static_cast<unsigned int>(f_id));
-            }
-        }
-
-        std::vector<int> filament_nozzle_map(filament_count, 0);
-        std::vector<int> filament_volume_map(filament_count, 0);
-        auto volume_type_str_to_enum = ConfigOptionEnum<NozzleVolumeType>::get_enum_values();
-        for (const auto& fil_info : plate_data_list[i]->slice_filaments_info) {
-            if (fil_info.id >= 0 && fil_info.id < filament_count) {
-                filament_nozzle_map[fil_info.id] = fil_info.group_id.empty() ? 0 : fil_info.group_id.front();
-                if (volume_type_str_to_enum.count(fil_info.nozzle_volume_type)) {
-                    filament_volume_map[fil_info.id] = volume_type_str_to_enum.at(fil_info.nozzle_volume_type);
-                }
-            }
-        }
-
-        m_plate_list[index]->set_filament_nozzle_maps(filament_nozzle_map);
-        m_plate_list[index]->set_filament_volume_maps(filament_volume_map);
-
-        auto group_result = MultiNozzleUtils::LayeredNozzleGroupResult::create(filament_nozzle_map, nozzle_infos, used_fils);
-        if (group_result)
-            gcode_result->nozzle_group_result = std::make_shared<MultiNozzleUtils::LayeredNozzleGroupResult>(group_result.value());
-        else
-            gcode_result->nozzle_group_result = nullptr;
+        auto mapping_result = Vortek::PlateMapping::load_from_3mf_structure(
+            plate_data_list[i],
+            filament_count,
+            gcode_result
+        );
+        m_plate_list[index]->set_filament_nozzle_maps(mapping_result.filament_nozzle_map);
+        m_plate_list[index]->set_filament_volume_maps(mapping_result.filament_volume_map);
     }
     print();
     ret = reload_all_objects();

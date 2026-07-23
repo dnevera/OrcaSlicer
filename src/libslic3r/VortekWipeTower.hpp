@@ -9,12 +9,24 @@
 #define VORTEK_WIPE_TOWER_HPP
 
 #include "GCode/WipeTower.hpp"
+#include <string>
+#include <vector>
+#include <functional>
 
 namespace Slic3r {
     class PrintConfig;
+    class Print;
+    class DynamicConfig;
 }
 
 namespace Vortek {
+
+struct FilamentChangeTimeResult {
+    bool  performed = false;
+    float extra_time = 0.f;
+    bool  extruder_unloaded = false;
+    bool  flush_filament_changed = false;
+};
 
 /**
  * @class WipeTower
@@ -26,6 +38,30 @@ namespace Vortek {
  */
 class WipeTower {
 public:
+    /**
+     * @brief Checks if the active printer configuration corresponds to the H2C multi-nozzle printer.
+     */
+    static bool is_h2c_printer(const Slic3r::Print* print);
+    static bool is_h2c_printer(const Slic3r::PrintConfig& config);
+    static bool is_h2c_printer(const Slic3r::DynamicConfig& config);
+    static bool is_h2c_printer(const std::string& printer_model);
+
+    /**
+     * @brief Estimates time cost of H2C specific filament change.
+     */
+    static FilamentChangeTimeResult calculate_filament_change_time(
+        const std::string& printer_model,
+        int new_extruder_id,
+        int next_filament_id,
+        int old_filament_in_extruder,
+        int old_filament_in_nozzle,
+        bool filament_in_nozzle_change,
+        bool nozzle_in_extruder_change,
+        const std::vector<unsigned char>& m_filament_id,
+        const std::function<float(size_t)>& get_filament_unload_time,
+        const std::function<float(size_t)>& get_filament_load_time
+    );
+
     /**
      * @brief Initializes the WipeTower parameters from the PrintConfig.
      * @param tower Host WipeTower instance to configure.
@@ -72,6 +108,25 @@ public:
      * @brief Checks if two filaments map to the same physical nozzle.
      */
     static bool is_same_nozzle(const Slic3r::WipeTower& tower, int filament_id_1, int filament_id_2, int layer_id);
+
+    /**
+     * @brief Initializes NozzleStatusRecorder with the starting filament for each nozzle.
+     */
+    static void initialize_nozzle_status(
+        Slic3r::MultiNozzleUtils::NozzleStatusRecorder& recorder,
+        const Slic3r::MultiNozzleUtils::LayeredNozzleGroupResult& group_result,
+        const Slic3r::Print* print = nullptr
+    );
+
+    /**
+     * @brief Overrides prime volumes to 0 if the target nozzle already contains the requested filament.
+     */
+    static void adjust_prime_volumes(
+        int prev_nozzle_filament,
+        int new_filament_id,
+        float& wipe_volume_ec,
+        float& wipe_volume_nc
+    );
 };
 
 } // namespace Vortek

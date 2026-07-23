@@ -93,8 +93,8 @@ enum InfillPattern : int {
     ipHoneycomb, ip3DHoneycomb, ipLateralHoneycomb, ipLateralLattice,
     ipCrossHatch, ipTpmsD, ipTpmsFK, ipGyroid,
     ipConcentric, ipHilbertCurve, ipArchimedeanChords, ipOctagramSpiral,
-    ipFlowWeaving,
     ipSupportBase, ipConcentricInternal,
+    ipFlowWeaving,
     ipCount,
 };
 
@@ -1395,19 +1395,20 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool, zaa_dont_alternate_fill_direction))
     ((ConfigOptionFloat, zaa_min_z))
     ((ConfigOptionFloat, zaa_minimize_perimeter_height))
-
-    // Flow Weaving: virtual layer interlocking via Z + width modulation
-    ((ConfigOptionFloat,                  flow_weaving_z_amplitude))
-    ((ConfigOptionFloat,                  flow_weaving_xy_amplitude))
-    ((ConfigOptionFloat,                  flow_weaving_period))
-    ((ConfigOptionInt,                    flow_weaving_z_flow_tolerance))
-    ((ConfigOptionInt,                    flow_weaving_z_fade_layers))
-    // Flow Weaving: overlap degree — how much the downward stroke presses into the
-    // previous layer's valleys to enhance interlayer adhesion.
-    // 0.0 = symmetric sine (no interlocking bias)
-    // 0.3 = 30% extra downward push (recommended)
-    // 1.0 = full amplitude boost on downward stroke (maximum adhesion)
-    ((ConfigOptionFloat,                  flow_weaving_overlap_degree))
+    // FlowWeaving infill parameters
+    ((ConfigOptionFloat, flow_weaving_z_amplitude))
+    ((ConfigOptionFloat, flow_weaving_xy_amplitude))
+    ((ConfigOptionFloat, flow_weaving_xy_path_amplitude))
+    ((ConfigOptionFloat, flow_weaving_period))
+    ((ConfigOptionFloat, flow_weaving_phase_offset))
+    ((ConfigOptionFloat, flow_weaving_z_phase_offset))
+    ((ConfigOptionFloat, flow_weaving_z_overlap))
+    ((ConfigOptionInt,   flow_weaving_top_taper_layers))
+    ((ConfigOptionFloat, flow_weaving_speed))
+    ((ConfigOptionFloat, flow_weaving_taper_length))
+    ((ConfigOptionFloat, flow_weaving_wall_overlap))
+    ((ConfigOptionBool,  flow_weaving_ironing))
+    ((ConfigOptionFloat, flow_weaving_ironing_speed))
     )
 
 PRINT_CONFIG_CLASS_DEFINE(

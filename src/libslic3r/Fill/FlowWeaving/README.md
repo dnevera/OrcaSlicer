@@ -1,156 +1,117 @@
-# Flow Weaving — Inter-Layer Strength via Sinusoidal Modulation
+# FlowWeaving — 3D Inter-Layer Interlocking Infill
 
-> **Experimental infill pattern for OrcaSlicer that creates physical 3D interlocking
-> between layers to improve Z-axis strength in FDM-printed parts.**
-
-## Overview
-
-Traditional FDM parts have Z-axis tensile strength of only **30–50%** compared to the
-XY plane due to the flat geometry of layer-to-layer contact.  Flow Weaving replaces
-flat layering with sinusoidal 3D engagement — simultaneously modulating the **extrusion
-width (XY)** and the **nozzle height (Z)** along each infill line.
-
-Phase alternation between layers (even = 0, odd = π) ensures that peaks on layer N
-align with troughs on layer N+1, creating a mechanical interlock:
-
-```
-Layer N+1 (φ=π):   ──╌╌──▓▓▓▓──╌╌──▓▓▓▓──╌╌──    (peak fills trough below)
-Layer N   (φ=0):   ▓▓▓▓──╌╌──▓▓▓▓──╌╌──▓▓▓▓──    (trough receives peak above)
-```
+**Branch:** `flow_weaving_infill`  
+**Location:** `src/libslic3r/Fill/FlowWeaving/`  
+**Pattern ID:** `ipFlowWeaving` (OrcaSlicer UI: "Flow weaving")
 
 ---
 
-## Physical Mechanisms
+## What Is It?
 
-### 1. Mechanical Interlocking (Geometric Lock)
-Sinusoidal peaks physically interlock between layers.  Delamination requires
-either shearing through the polymer peaks or overcoming friction on wave slopes.
+FlowWeaving is a custom FDM infill pattern that modulates both the **Z position** and the **extrusion width** of each infill line as a sinusoidal wave. The result is a 3D interlocking structure instead of flat 2D infill layers.
 
-### 2. Load Vector Transformation
-Flat layer bonds fail in pure Mode I (opening) fracture.  The wave surface converts
-part of the normal stress into shear — and polymers are significantly stronger in shear.
-
-### 3. Increased Contact Area
-The wavy path increases the contact/diffusion zone between layers by **8–22%**
-(depending on amplitude/period ratio):
-
-$$L_{wave} = \int_{0}^{\lambda} \sqrt{1 + \left(\frac{2\pi A}{\lambda} \cos\left(\frac{2\pi x}{\lambda}\right)\right)^2} dx$$
-
-### 4. Crack Arresting
-In flat bonds, cracks propagate in a straight line.  The wave profile forces cracks
-to constantly change direction (up/down wave slopes), dissipating energy and
-localizing damage.
-
-### 5. Dynamic Compression Effect
-When the nozzle dips into the trough of the previous layer, reduced clearance
-increases hydrodynamic pressure of the melt, forcing polymer into surface
-irregularities and improving thermal bonding (reptation).
-
----
-
-## Architecture
-
-Flow Weaving is implemented across two independent stages:
+Standard FDM infill is essentially 2.5D — layers are stacked flat with no physical interlocking between them. This means inter-layer tensile strength is 50–75% lower than in-plane strength. FlowWeaving attacks this weakness directly.
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Slicing time (Fill stage)                           │
-│  FillFlowWeaving.cpp                                 │
-│  ● Generates rectilinear lines at 100% density       │
-│  ● Subdivides into sub-segments (~period/8)          │
-│  ● Applies sinusoidal WIDTH modulation per segment   │
-│  ● Output: ExtrusionMultiPath with variable width    │
-└──────────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌──────────────────────────────────────────────────────┐
-│  G-code generation time (GCode stage)                │
-│  FlowWeavingZModulator.hpp                           │
-│  ● Computes sinusoidal Z-HEIGHT modulation           │
-│  ● Adaptive amplitude near bed/model boundaries      │
-│  ● Phase alternation per layer for interlocking      │
-│  ● Stateful: tracks cumulative distance per path     │
-└──────────────────────────────────────────────────────┘
+Standard infill (side view):       FlowWeaving (side view):
+━━━━━━━━━━━━━━━━━━━━━━━━          ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿
+━━━━━━━━━━━━━━━━━━━━━━━━   →     ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿
+━━━━━━━━━━━━━━━━━━━━━━━━          ∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿∿
 ```
 
-### Files in this directory
+Layers with a phase offset of 0.5 (half period) interlock mechanically:
 
-| File | Role |
-|------|------|
-| `FillFlowWeaving.hpp` | Class declaration — inherits from `Fill` |
-| `FillFlowWeaving.cpp` | XY width modulation engine (slicing time) |
-| `FlowWeavingZModulator.hpp` | Z height modulation engine (G-code time, header-only) |
-| `README.md` | This documentation |
-
-### Integration points (outside this directory)
-
-| File | What |
-|------|------|
-| `PrintConfig.hpp/cpp` | `ipFlowWeaving` enum + 3 config parameters |
-| `Preset.cpp` | Preset serialization keys |
-| `Fill/FillBase.cpp` | Factory registration |
-| `Fill/Fill.cpp` | Skip solid-surface override for FW |
-| `GCode.hpp` | `m_fw_z_mod` member |
-| `GCode.cpp` | 5 injection points (set_top_z, reset_path, is_active, compute_z, advance, should_skip_z_reset) |
-| `GUI/Tab.cpp` | Settings UI group + dirty suppression |
-| `GUI/ConfigManipulation.cpp` | Density auto-lock + toggle visibility |
-| `GUI/GUI_Factories.cpp` | Per-object override entries |
+```
+Layer N   (phase=0):    ╰╮  ╰╮  ╰╮  ╰╮
+Layer N+1 (phase=0.5):    ╮╰  ╮╰  ╮╰  ╮╰
+```
 
 ---
 
 ## Parameters
 
-| Parameter | Default | Range | Description |
-|-----------|---------|-------|-------------|
-| `flow_weaving_z_amplitude` | 30% | 0–100% | Z-height modulation as % of layer height |
-| `flow_weaving_xy_amplitude` | 15% | 0–50% | Width modulation as % of nominal line width |
-| `flow_weaving_period` | 3.0 mm | 0.5–10 mm | Wavelength of the sinusoidal modulation |
+| Parameter | UI Name | Default | Range | Description |
+|---|---|---|---|---|
+| `flow_weaving_z_amplitude` | Z weaving amplitude | 95% | 0–150% | Sine amplitude as % of layer height |
+| `flow_weaving_xy_amplitude` | XY width modulation | 50% | 0–100% | Width variation as % of flow width |
+| `flow_weaving_xy_path_amplitude` | XY path amplitude | 0.2mm | 0–2mm | Lateral path displacement perpendicular to travel |
+| `flow_weaving_period` | Weaving period | 1mm | 0.5–20mm | Wavelength of one full sine cycle |
+| `flow_weaving_phase_offset` | Layer phase offset | 0.5 | 0–1 | Phase shift between same-direction layers (0.5 = best interlocking) |
+| `flow_weaving_z_overlap` | Z overlap into previous layer | 25% | 0–50% | How far nozzle may press into previous layer (% of layer_h) |
+| `flow_weaving_top_taper_layers` | Top surface taper layers | 3 | 0–10 | Layers over which upward Z-amp tapers to 0 near top shell |
 
-> **Note:** Density is forced to 100% internally (not user-adjustable when FW is active).
-
----
-
-## Limitations & Known Challenges
-
-### Hydrodynamic Flow Lag
-At high speeds (v=150 mm/s) with short periods (λ=3 mm), the flow change frequency
-reaches ~50 Hz.  Melt compressibility in the hotend causes the actual extrusion peak
-to lag behind the commanded E-rate.  Without PA-like compensation, peak width and
-trough Z may misalign.
-
-### Z-Axis Kinematics
-Most bed-slinger printers cannot oscillate Z at 30–80 Hz without vibration/resonance.
-Best suited for CoreXY with moving toolhead Z (Voron 2.4, Bambu Lab, etc.) or
-reduced infill speed.
-
-### Surface Artifacts
-Cyclic pressure changes can bleed into perimeters as moiré.
-Recommendation: ≥2 perimeters before Flow Weaving infill begins.
+### Recommended Starting Settings (0.4mm nozzle, 0.2mm layer height)
+- Period: 1–2mm (shorter = more interlocking, but slower Z axis)
+- Z amplitude: 80–95% (nearly full layer height)
+- XY width modulation: 30–50%
+- Z overlap: 25% (= 0.05mm penetration into previous layer)
+- Top taper layers: 3
 
 ---
 
-## Testing Methodology
+## Architecture Overview
 
-1. **Z-axis Tensile Test** — Print vertical dog-bone specimens (ASTM D638 / ISO 527).
-   Compare failure load at amplitudes 10%, 20%, 30%, 40%.
-2. **Shear Test** — Three-point bending of short beams to load inter-layer bonds in shear.
-3. **Kinematic Frequency Limit** — Find max print speed where Z-steppers don't overheat
-   or skip steps at a given λ.
+**Key principle: ZERO changes to GCode.cpp or ExtrusionEntity.hpp.**
 
----
+FlowWeaving uses only existing OrcaSlicer mechanisms:
+- `ExtrusionPathContoured` with `z_contoured = true` (ZAA mechanism)
+- `mm3_per_mm` per sub-segment (standard extrusion field)
+- `Polyline3` with Z coordinates baked in
 
-## References
+Each infill polyline is subdivided into short sub-segments (8 per period by default). Each sub-segment becomes its own `ExtrusionPathContoured` with:
+- Z offsets encoded in `Polyline3` coordinates
+- Flow rate (`mm3_per_mm`) scaled by the XY width modulation factor
+- `z_contoured = true` so GCode.cpp handles Z emission with E-compensation
 
-- Kishore, V. et al. "Infrared preheating to improve interlayer strength of big area
-  additive manufacturing (BAAM) components." *Additive Manufacturing* 14, 2017.
-- Seppala, J.E. et al. "Weld formation during material extrusion additive
-  manufacturing." *Soft Matter* 13, 2017.
-- Hart, K.R. et al. "Increased fracture toughness of additively manufactured
-  amorphous thermoplastics via thermal annealing." *Polymer* 144, 2018.
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for full technical details.
 
 ---
 
-## License
+## Files
 
-This code is part of the OrcaSlicer fork and follows the same license terms
-(AGPLv3, as inherited from PrusaSlicer/BambuStudio).
+| File | Purpose |
+|---|---|
+| `FillFlowWeaving.cpp` | Main algorithm: sub-segmentation, Z/XY modulation, safety clamping |
+| `FillFlowWeaving.hpp` | Class declaration |
+| `FlowWeavingZModulator.hpp` | Sine modulator (header-only), factory for wave functions |
+| `FlowWeavingContext.hpp` | Parameter context (if used) |
+| `FlowWeavingFadeEnvelope.hpp` | Fade-to-wall taper logic |
+| `FlowWeavingZClamp.hpp` | Z safety clamp helpers |
+| `README.md` | This file |
+| `CONCEPT.md` | Research, hypotheses, future directions |
+| `IMPLEMENTATION.md` | Technical architecture and implementation log |
+
+---
+
+## Build Notes
+
+**Agent rule: never trigger builds.** The user builds manually.
+
+```bash
+cd OrcaSlicerBuild
+./build_clean_orca.sh release-arm64
+```
+
+Or incremental:
+```bash
+cmake --build build-arm64-release --target OrcaSlicer -j8
+```
+
+---
+
+## Known Limitations / Work in Progress
+
+1. **Wave symmetry**: On lower layers near the floor, the waveform is asymmetric (lower bound clamping cuts the negative half). This is by design for the first few layers.
+2. **Top taper**: Implemented but not yet tested in print — needs real-world validation.
+3. **Z overlap**: Research suggests 20–30% of layer_h is safe for bonding without delamination. 50% is aggressive. Optimal value is material/temperature dependent.
+4. **GCode comments**: No `; FlowWeaving infill` marker in output yet (architecture constraint — would require touching GCode.cpp or adding ExtrusionRole).
+
+---
+
+## Git History
+
+| Commit | Description |
+|---|---|
+| `f266e172c4` | Z safety clamp via first_layer_height |
+| `a6ccf4571c` | Add flow_weaving_z_overlap parameter |
+| *(current)* | Add flow_weaving_top_taper_layers + top-surface taper |

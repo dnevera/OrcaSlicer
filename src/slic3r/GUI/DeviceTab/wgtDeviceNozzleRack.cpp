@@ -750,11 +750,31 @@ void wgtDeviceNozzleRackNozzleItem::CreateGui()
     m_nozzle_selected_bitmap = new wxStaticBitmap(this, wxID_ANY, wxNullBitmap, wxDefaultPosition, WX_DIP_SIZE(20, 20));
     m_nozzle_selected_bitmap->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
 
+    // Color swatch — solid color indicator for loaded filament
+    m_color_swatch = new wxPanel(this, wxID_ANY, wxDefaultPosition, WX_DIP_SIZE(14, 14));
+    m_color_swatch->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
+    m_color_swatch->Show(false);
+    m_color_swatch->Bind(wxEVT_PAINT, [this](wxPaintEvent&) {
+        wxPaintDC dc(m_color_swatch);
+        wxSize sz = m_color_swatch->GetClientSize();
+        if (!m_filament_color.empty()) {
+            wxColour clr("#" + m_filament_color);
+            dc.SetBrush(wxBrush(clr));
+            dc.SetPen(wxPen(wxColour(136, 136, 136), 1));
+            dc.DrawRoundedRectangle(0, 0, sz.x, sz.y, 2);
+        }
+    });
+
     top_h_sizer->Add(m_nozzle_label_id, 0, wxTOP | wxLEFT, FromDIP(6));
     top_h_sizer->AddStretchSpacer(1);
     top_h_sizer->Add(m_nozzle_icon, 0, wxTOP, FromDIP(10));
     top_h_sizer->AddStretchSpacer(1);
-    top_h_sizer->Add(m_nozzle_selected_bitmap, 0, wxTOP | wxRIGHT, FromDIP(2));
+
+    // Vertical stack: color swatch on top, selected bitmap below
+    wxBoxSizer* right_v = new wxBoxSizer(wxVERTICAL);
+    right_v->Add(m_color_swatch, 0, wxTOP | wxRIGHT, FromDIP(4));
+    right_v->Add(m_nozzle_selected_bitmap, 0, wxTOP | wxRIGHT, FromDIP(2));
+    top_h_sizer->Add(right_v, 0, wxALIGN_TOP);
 
     // Bottom V
     wxBoxSizer* bottom_v = new wxBoxSizer(wxVERTICAL);
@@ -813,7 +833,16 @@ void wgtDeviceNozzleRackNozzleItem::SetSelected(bool selected)
             SetBorderColor(StateColor::darkModeColorFor(s_hgreen_clr));
         } else {
             m_nozzle_selected_bitmap->SetBitmap(wxNullBitmap);
-            SetBorderColor(StateColor::darkModeColorFor(s_gray_clr));
+            if (m_is_in_extruder && !m_filament_color.empty()) {
+                wxColour clr("#" + m_filament_color);
+                SetBorderColor(StateColor(std::make_pair(clr, (int)StateColor::Normal)));
+                SetBorderWidth(2);
+                SetBorderStyle(wxPENSTYLE_SHORT_DASH);
+            } else {
+                SetBorderColor(StateColor::darkModeColorFor(s_gray_clr));
+                SetBorderWidth(1);
+                SetBorderStyle(wxPENSTYLE_SOLID);
+            }
         }
 
         Refresh();
@@ -832,7 +861,23 @@ void wgtDeviceNozzleRackNozzleItem::Update(const std::shared_ptr<DevNozzleRack> 
 
         /*check empty first*/
         if (nozzle_info.IsEmpty()) {
-            SetNozzleStatus(NOZZLE_STATUS::NOZZLE_EMPTY, _L("Empty"), wxEmptyString, color);
+            // H2C: If this rack slot is the ONLY empty slot and the extruder
+            // has a nozzle, show dashed border with extruder's filament color.
+            // If multiple slots are empty we can't tell which one the extruder
+            // nozzle came from, so all stay "Empty".
+            if (on_rack) {
+                DevNozzleSystem* ns = rack->GetNozzleSystem();
+                const auto &ext_nozzle = ns ? ns->GetExtNozzle(MAIN_EXTRUDER_ID) : DevNozzle();
+                int rack_occupied = static_cast<int>(rack->GetRackNozzles().size());
+                int empty_count   = 6 - rack_occupied; // rack has 6 physical slots
+                if (!ext_nozzle.IsEmpty() && empty_count == 1) {
+                    SetNozzleStatus(NOZZLE_STATUS::NOZZLE_IN_EXTRUDER, _L("In Use"), wxEmptyString, ext_nozzle.GetFilamentColor());
+                } else {
+                    SetNozzleStatus(NOZZLE_STATUS::NOZZLE_EMPTY, _L("Empty"), wxEmptyString, color);
+                }
+            } else {
+                SetNozzleStatus(NOZZLE_STATUS::NOZZLE_EMPTY, _L("Empty"), wxEmptyString, color);
+            }
         } else if (nozzle_info.IsNormal()) {
             SetNozzleStatus(NOZZLE_STATUS::NOZZLE_NORMAL, diameter_str, flowtype_str, color);
         } else if (nozzle_info.IsAbnormal()) {
@@ -875,6 +920,13 @@ void wgtDeviceNozzleRackNozzleItem::SetNozzleStatus(NOZZLE_STATUS status, const 
             m_nozzle_icon->SetBitmap(m_nozzle_error_image->bmp());
             break;
         }
+        case Slic3r::GUI::wgtDeviceNozzleRackNozzleItem::NOZZLE_IN_EXTRUDER:
+        {
+            // Show empty nozzle icon but with dashed border in filament color
+            if (!m_nozzle_empty_image) { m_nozzle_empty_image = new ScalableBitmap(this, "dev_rack_nozzle_empty", 46);}
+            m_nozzle_icon->SetBitmap(m_nozzle_empty_image->bmp());
+            break;
+        }
         default:
         {
             break;
@@ -891,11 +943,37 @@ void wgtDeviceNozzleRackNozzleItem::SetNozzleStatus(NOZZLE_STATUS status, const 
             m_nozzle_label_1->SetForegroundColour(StateColor::darkModeColorFor(*wxBLACK));
             m_nozzle_status_icon->Show(false);
         }
+
+        // Dashed border for nozzle currently in extruder
+        bool was_in_extruder = m_is_in_extruder;
+        m_is_in_extruder = (status == NOZZLE_IN_EXTRUDER);
+        if (m_is_in_extruder != was_in_extruder) {
+            if (m_is_in_extruder && !m_filament_color.empty()) {
+                wxColour clr("#" + m_filament_color);
+                SetBorderColor(StateColor(std::make_pair(clr, (int)StateColor::Normal)));
+                SetBorderWidth(2);
+                SetBorderStyle(wxPENSTYLE_SHORT_DASH);
+            } else {
+                SetBorderColor(StateColor(std::make_pair(0xCECECE, (int)StateColor::Normal)));
+                SetBorderWidth(1);
+                SetBorderStyle(wxPENSTYLE_SOLID);
+            }
+        }
     }
 
     bool update_layout = (m_nozzle_label_1->GetLabel() != str1 || m_nozzle_label_2->GetLabel() != str2);
     m_nozzle_label_1->SetLabel(str1);
     m_nozzle_label_2->SetLabel(str2);
+
+    // Update color swatch visibility and color
+    if (m_color_swatch) {
+        bool show_swatch = ((status == NOZZLE_NORMAL) || (status == NOZZLE_IN_EXTRUDER)) && !color.empty();
+        m_color_swatch->Show(show_swatch);
+        if (show_swatch) {
+            m_color_swatch->Refresh();
+        }
+        update_layout = true;
+    }
 
     if (update_layout) {
         Layout();
@@ -962,6 +1040,11 @@ void wgtDeviceNozzleRackNozzleItem::Rescale()
         m_nozzle_icon->SetBitmap(m_nozzle_error_image->bmp());
         break;
     }
+    case Slic3r::GUI::wgtDeviceNozzleRackNozzleItem::NOZZLE_IN_EXTRUDER:
+    {
+        m_nozzle_icon->SetBitmap(m_nozzle_empty_image->bmp());
+        break;
+    }
     default:
     {
         break;
@@ -1013,6 +1096,8 @@ void wgtDeviceNozzleRackNozzleItem::SetDisable(bool disabled)
     m_nozzle_selected_bitmap->SetBackgroundColour(bg_clr);
 
     SetBackgroundColor(bg_clr);
+    if (m_color_swatch)
+        m_color_swatch->SetBackgroundColour(bg_clr);
     Refresh();
 };
 

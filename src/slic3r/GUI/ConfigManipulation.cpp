@@ -647,6 +647,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
 
     toggle_line("symmetric_infill_y_axis", is_zig_zag || is_cross_zag || is_locked_zig);
 
+    // FlowWeaving infill — show parameters only when pattern is FlowWeaving
+    bool is_flow_weaving = pattern == ipFlowWeaving;
+    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers", "flow_weaving_speed", "flow_weaving_taper_length", "flow_weaving_wall_overlap", "flow_weaving_ironing", "flow_weaving_ironing_speed" })
+        toggle_line(el, is_flow_weaving);
+
     bool has_spiral_vase         = config->opt_bool("spiral_mode");
     toggle_line("spiral_mode_smooth", has_spiral_vase);
     toggle_line("spiral_mode_max_xy_smoothing", has_spiral_vase && config->opt_bool("spiral_mode_smooth"));
@@ -987,6 +992,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool lightning_options = config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipLightning;
     for (auto el : { "lightning_overhang_angle", "lightning_prune_angle", "lightning_straightening_angle" })
         toggle_line(el, lightning_options);
+
+    bool flow_weaving_options =
+        config->opt_enum<InfillPattern>("sparse_infill_pattern") == InfillPattern::ipFlowWeaving;
+    for (auto el : { "flow_weaving_z_amplitude", "flow_weaving_xy_amplitude", "flow_weaving_xy_path_amplitude", "flow_weaving_period", "flow_weaving_phase_offset", "flow_weaving_z_phase_offset", "flow_weaving_z_overlap", "flow_weaving_top_taper_layers", "flow_weaving_speed", "flow_weaving_taper_length", "flow_weaving_wall_overlap", "flow_weaving_ironing", "flow_weaving_ironing_speed" })
+        toggle_line(el, flow_weaving_options);
         
     // Adaptative Cubic and support cubic infill patterns do not support infill rotation.
     bool FillAdaptive = (pattern == InfillPattern::ipAdaptiveCubic || pattern == InfillPattern::ipSupportCubic);

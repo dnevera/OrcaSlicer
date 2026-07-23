@@ -144,10 +144,14 @@ public:
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;
-    // Flow Weaving: safe zone — intersection of fill_no_overlap_expolygons
-    // across all layers in the Z-modulation range.  Sub-segments inside this
-    // zone get full modulation; those outside taper to nominal.
-    ExPolygons  fw_safe_expolygons;
+    // Cross-layer no_overlap data for patterns that need adjacent layer info
+    // (e.g., FlowWeaving for Z-modulation safe zone). Populated by make_fills()
+    // only when needs_cross_layer_data() returns true.
+    ExPolygons  no_overlap_above;
+    ExPolygons  no_overlap_below;
+    // Number of consecutive infill layers above this one (for top-surface taper).
+    // Populated by make_fills() when needs_cross_layer_data() returns true.
+    int         infill_layers_above = 0;
     bool dont_alternate_fill_direction = false;
 
     static float infill_anchor;
@@ -168,6 +172,21 @@ public:
 
     // Do not sort the fill lines to optimize the print head path?
     virtual bool no_sort() const { return false; }
+
+    // Does this fill pattern need no_overlap data from adjacent layers?
+    // Override to return true; make_fills() will populate no_overlap_above/below.
+    virtual bool needs_cross_layer_data() const { return false; }
+
+    // When sparse_infill_density == 100%, prepare_fill_surfaces() converts stInternal
+    // surfaces to stInternalSolid and they would normally skip the sparse fill.
+    // Override to return true to redirect those stInternalSolid surfaces back through
+    // fill_surface_extrusion() at full density (e.g. FlowWeaving must run at any density).
+    virtual bool handles_solid_internal() const { return false; }
+
+    // G-code post-processing and validation API for infills
+    virtual bool can_filter_gcode() const { return false; }
+    virtual std::string filter_gcode(const std::string &gcode, const FullPrintConfig &config) const { return gcode; }
+    virtual void validate_gcode(const std::string &gcode, const FullPrintConfig &config) const {}
 
     virtual bool is_self_crossing() = 0;
 
