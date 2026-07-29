@@ -421,8 +421,9 @@ public:
             if (opt->type() == this->type()) {
                 auto other = static_cast<const ConfigOptionVector<T>*>(opt);
                 if (other->values.empty())
-                    throw ConfigurationError("ConfigOptionVector::set(): Assigning from an empty vector");
-                this->values.emplace_back(other->values.front());
+                    this->values.emplace_back(T());
+                else
+                    this->values.emplace_back(other->values.front());
             } else if (opt->type() == this->scalar_type())
                 this->values.emplace_back(static_cast<const ConfigOptionSingle<T>*>(opt)->value);
             else
@@ -435,8 +436,9 @@ public:
     void set_at(const ConfigOption *rhs, size_t i, size_t j) override
     {
         // It is expected that the vector value has at least one value, which is the default, if not overwritten.
-        assert(! this->values.empty());
-        if (this->values.size() <= i) {
+        if (this->values.empty()) {
+            this->values.resize(i + 1, T());
+        } else if (this->values.size() <= i) {
             // Resize this vector, fill in the new vector fields with the copy of the first field.
             T v = this->values.front();
             this->values.resize(i + 1, v);
@@ -445,8 +447,9 @@ public:
             // Assign the first value of the rhs vector.
             auto other = static_cast<const ConfigOptionVector<T>*>(rhs);
             if (other->values.empty())
-                throw ConfigurationError("ConfigOptionVector::set_at(): Assigning from an empty vector");
-            this->values[i] = other->get_at(j);
+                this->values[i] = T();
+            else
+                this->values[i] = other->get_at(j);
         } else if (rhs->type() == this->scalar_type())
             this->values[i] = static_cast<const ConfigOptionSingle<T>*>(rhs)->value;
         else
